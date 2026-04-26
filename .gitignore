@@ -1,5 +1,36 @@
+# Flutter/Dart
 .dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.metadata
 build/
-.env
-.DS_Store
 *.g.dart
+*.freezed.dart
+pubspec.lock
+
+# IDE
+.idea/
+.vscode/
+*.iml
+cognitrack_mobile.iml
+
+# 🔒 Firebase sensitive — NEVER commit these
+android/app/google-services.json
+ios/Runner/GoogleService-Info.plist
+
+# iOS native
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+
+# Android native
+android/local.properties
+android/.gradle/
+android/captures/
+
+# macOS
+.DS_Store
+
+# Environment
+.env
