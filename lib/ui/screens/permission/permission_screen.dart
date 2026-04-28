@@ -9,8 +9,37 @@ import '../../theme/app_spacing.dart';
 import '../../theme/app_text_styles.dart';
 import '../../../core/providers/permissions_provider.dart';
 
-class PermissionScreen extends StatelessWidget {
+// MISS-01 FIX: Was a StatelessWidget — could never call startListening() or
+// stopListening(), so WidgetsBindingObserver was never registered. When the
+// user returned from Android Settings after granting permission,
+// didChangeAppLifecycleState.resumed never fired, check() was never called,
+// and the router never re-evaluated — user was stuck on this screen forever
+// until force-kill and relaunch.
+//
+// Converted to StatefulWidget. initState() registers the observer;
+// dispose() unregisters it. No logic change to the build tree.
+class PermissionScreen extends StatefulWidget {
   const PermissionScreen({super.key});
+
+  @override
+  State<PermissionScreen> createState() => _PermissionScreenState();
+}
+
+class _PermissionScreenState extends State<PermissionScreen> {
+  @override
+  void initState() {
+    super.initState();
+    // Register the WidgetsBindingObserver so didChangeAppLifecycleState.resumed
+    // triggers check() the moment the user navigates back from Android Settings.
+    context.read<PermissionsProvider>().startListening();
+  }
+
+  @override
+  void dispose() {
+    // Unregister to prevent the observer leaking after the screen is removed.
+    context.read<PermissionsProvider>().stopListening();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -84,6 +113,7 @@ class PermissionScreen extends StatelessWidget {
     );
   }
 }
+
 
 class _PermItem extends StatelessWidget {
   const _PermItem({

@@ -54,7 +54,9 @@ CognitiveReport calculateCognitiveDebt(List<AppEvent> events) {
       wmCapacityRemaining: wmInitial,
       residueAtEOD: 0,
       hourlyDebt: List.filled(24, 0),
-      peakLoadHour: 0,
+      // BUG-08: null, not 0 — there are no events so there is no peak hour.
+      // 0 would be misread as midnight by the dashboard label.
+      peakLoadHour: null,
     );
   }
 
@@ -68,7 +70,6 @@ CognitiveReport calculateCognitiveDebt(List<AppEvent> events) {
     residue: 0,
     focusDepth: 0,
     lastSwitchTs: startTs,
-    lastResiduDecayTs: startTs,
   );
 
   Category? lastCategory;
@@ -126,7 +127,6 @@ CognitiveReport calculateCognitiveDebt(List<AppEvent> events) {
 
       // 9. Update state
       state.lastSwitchTs = event.timestamp;
-      state.lastResiduDecayTs = event.timestamp;
       lastCategory = event.category;
     } else if (event.eventType == EventType.break_ ||
         event.eventType == EventType.idle) {
@@ -167,20 +167,36 @@ CognitiveReport calculateCognitiveDebt(List<AppEvent> events) {
           ((raw / hourlyDebtThreshold) * 100).clamp(0, 100).roundToDouble())
       .toList();
 
-  // Peak hour = hour with highest normalised load
-  int peakLoadHour = 0;
-  for (int i = 1; i < 24; i++) {
-    if (hourlyDebt[i] > hourlyDebt[peakLoadHour]) peakLoadHour = i;
+  // Peak hour = hour with highest normalised load.
+  // BUG-08: if every bucket is 0 (no switch events today) the default index 0
+  // would be a false "midnight peak". Return null instead.
+  int? peakLoadHour;
+  if (hourlyDebt.any((v) => v > 0)) {
+    peakLoadHour = 0;
+    for (int i = 1; i < 24; i++) {
+      if (hourlyDebt[i] > hourlyDebt[peakLoadHour!]) peakLoadHour = i;
+    }
   }
 
   final cognitiveLoadPct =
       ((totalDebt / dailyDebtThreshold) * 100).clamp(0, 100).roundToDouble();
 
+  // ─── BUG-04: Decay residue to true end-of-day (midnight) ────────────────
+  // residueAtEOD was previously captured at the last event's timestamp.
+  // Apply one final decay pass from the last event to midnight so the
+  // stored value reflects the state a user's brain is actually in at EOD.
+  final lastEventTs = sorted.last.timestamp;
+  final now = DateTime.fromMillisecondsSinceEpoch(lastEventTs);
+  final midnight = DateTime(now.year, now.month, now.day + 1) // next calendar day 00:00
+      .millisecondsSinceEpoch;
+  final msToMidnight = (midnight - lastEventTs).toDouble();
+  final residueAtEOD = decayResidue(state.residue, msToMidnight);
+
   return CognitiveReport(
     cognitiveDebt: (totalDebt * 10).roundToDouble() / 10,
     cognitiveLoadPct: cognitiveLoadPct,
     wmCapacityRemaining: state.wmCapacity,
-    residueAtEOD: (state.residue * 1000).roundToDouble() / 1000,
+    residueAtEOD: (residueAtEOD * 1000).roundToDouble() / 1000,
     hourlyDebt: hourlyDebt,
     peakLoadHour: peakLoadHour,
   );

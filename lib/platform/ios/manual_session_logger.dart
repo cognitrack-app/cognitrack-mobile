@@ -9,6 +9,12 @@ class ManualSessionLogger {
     debugPrint('[ManualSessionLogger] iOS manual logger ready.');
   }
 
+  /// Returns true when the logger is permitted to operate.
+  /// The manual-entry scaffold needs no special system permissions,
+  /// so this always returns true. Wire a real check here when Screen Time
+  /// API or notification permissions are required.
+  Future<bool> hasPermission() async => true;
+
   Future<void> logFocusSession(int durationMinutes) async {
     final end = DateTime.now().millisecondsSinceEpoch;
     final start = end - (durationMinutes * 60000);

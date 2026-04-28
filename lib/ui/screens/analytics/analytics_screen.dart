@@ -23,11 +23,16 @@ class AnalyticsScreen extends StatefulWidget {
 }
 
 class _AnalyticsScreenState extends State<AnalyticsScreen> {
+  // FUNC-08 FIX: initState() only fires once (widget first insert). On tab
+  // re-visit (Dashboard → Analytics → Dashboard → Analytics) the second visit
+  // showed stale data because initState didn't re-run. didChangeDependencies()
+  // fires both on initial insert AND whenever the widget's route becomes active
+  // again, ensuring fresh data on every tab switch.
   @override
-  void initState() {
-    super.initState();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<AnalyticsProvider>().load();
+      if (mounted) context.read<AnalyticsProvider>().load();
     });
   }
 
@@ -39,7 +44,7 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
       body: SafeArea(
         child: CustomScrollView(
           slivers: [
-            SliverToBoxAdapter(child: _buildHeader()),
+            SliverToBoxAdapter(child: _buildHeader(p)),
             SliverToBoxAdapter(child: _buildVelocitySection(p)),
             SliverToBoxAdapter(child: _buildHeatmap(p)),
             SliverToBoxAdapter(child: _buildBrainLoad(p)),
@@ -53,11 +58,54 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
 
   // ── Header ─────────────────────────────────────────────────────────────────
 
-  Widget _buildHeader() => Padding(
+  Widget _buildHeader(AnalyticsProvider p) => Padding(
         padding: const EdgeInsets.fromLTRB(AppSpacing.lg, 12, AppSpacing.lg, 0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Row(
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.arrow_back_outlined,
+                      color: AppColors.textPrimary),
+                  onPressed: () {},
+                ),
+                Expanded(
+                    child: Center(
+                        child:
+                            Text('ANALYTICS', style: AppTextStyles.chipLabel))),
+                IconButton(
+                  icon: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      const Icon(Icons.settings_outlined,
+                          color: AppColors.textPrimary),
+                      if (p.breachCount > 0)
+                        Positioned(
+                          right: 0,
+                          top: 0,
+                          child: Container(
+                            padding: const EdgeInsets.all(2),
+                            decoration: const BoxDecoration(
+                              color: AppColors.red,
+                              shape: BoxShape.circle,
+                            ),
+                            constraints: const BoxConstraints(
+                                minWidth: 12, minHeight: 12),
+                            child: Text(
+                              p.breachCount.toString(),
+                              style: const TextStyle(
+                                  color: Colors.white, fontSize: 8),
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                  onPressed: () {},
+                ),
+              ],
+            ),
             Text('ANALYTICS',
                 style: AppTextStyles.display
                     .copyWith(fontWeight: FontWeight.w800, fontSize: 30)),
@@ -105,7 +153,8 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           const NtLabel('TEMPORAL DENSITY'),
           const SizedBox(height: AppSpacing.xs),
-          Text('Neural Load Heatmap', style: AppTextStyles.sectionHead),
+          Text('Temporal Density Heatmap', style: AppTextStyles.sectionHead),
+          Text('7-DAY ANALYSIS (24HR CYCLES)', style: AppTextStyles.chipLabel),
           const SizedBox(height: AppSpacing.md),
           if (p.loading)
             const ShimmerCard(height: 120)
@@ -139,9 +188,43 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text('WM STRAIN', style: AppTextStyles.chipLabel),
-                Text('${p.wmStrain.toStringAsFixed(0)}%',
-                    style: AppTextStyles.metricValue
-                        .copyWith(color: AppColors.red, fontSize: 20)),
+                Row(
+                  children: [
+                    Text('${p.wmStrain.toStringAsFixed(0)}%',
+                        style: AppTextStyles.metricValue
+                            .copyWith(color: AppColors.red, fontSize: 20)),
+                    if (p.todayHourlyBars.isNotEmpty) ...[
+                      const SizedBox(width: 12),
+                      SizedBox(
+                        width: 60,
+                        height: 24,
+                        child: LineChart(
+                          LineChartData(
+                            gridData: const FlGridData(show: false),
+                            titlesData: const FlTitlesData(show: false),
+                            borderData: FlBorderData(show: false),
+                            minY: 0,
+                            maxY: 100,
+                            lineBarsData: [
+                              LineChartBarData(
+                                spots: p.todayHourlyBars
+                                    .asMap()
+                                    .entries
+                                    .map((e) =>
+                                        FlSpot(e.key.toDouble(), e.value))
+                                    .toList(),
+                                isCurved: true,
+                                color: AppColors.red,
+                                barWidth: 1.5,
+                                dotData: const FlDotData(show: false),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
               ],
             ),
             const SizedBox(height: AppSpacing.sm),
@@ -254,8 +337,15 @@ class _VelocityChart extends StatelessWidget {
                 reservedSize: 22,
                 getTitlesWidget: (val, _) {
                   final h = val.toInt();
+                  // GAP-09 FIX: Only 08:00 and 20:00 labels existed — no
+                  // current-hour marker. Users couldn't tell where 'now' was
+                  // on the timeline. Added a 'NOW' label at the current hour.
+                  final currentHour = DateTime.now().hour;
                   if (h == 8) return _axisLabel('08:00');
                   if (h == 20) return _axisLabel('20:00');
+                  if (h == currentHour) {
+                    return _axisLabel('CURRENT\nOBSERVATION');
+                  }
                   return const SizedBox.shrink();
                 },
               ),
@@ -388,16 +478,12 @@ class _TemporalHeatmap extends StatelessWidget {
           const SizedBox(width: 8),
           _legendCell(AppColors.chartStrain, 'Strain'),
           const SizedBox(width: 8),
-          _legendCell(AppColors.chartRed, 'Peak'),
+          if (peakValue > 0)
+            _legendCell(AppColors.chartRed,
+                'Peak observed: ${peakValue.toStringAsFixed(0)}% Load @ ${dayLabels.isNotEmpty && peakCell.$1 < dayLabels.length ? dayLabels[peakCell.$1] : ""} ${(peakCell.$2).toString().padLeft(2, "0")}:00')
+          else
+            _legendCell(AppColors.chartRed, 'Peak'),
         ]),
-        if (peakValue > 0) ...[
-          const SizedBox(height: AppSpacing.xs),
-          Text(
-            'Peak observed: ${peakValue.toStringAsFixed(0)}% Load '
-            '@ ${dayLabels.isNotEmpty && peakCell.$1 < dayLabels.length ? dayLabels[peakCell.$1] : ""} ${(peakCell.$2).toString().padLeft(2, "0")}:00',
-            style: AppTextStyles.chipLabel.copyWith(color: AppColors.textMuted),
-          ),
-        ],
       ],
     );
   }
@@ -445,40 +531,70 @@ class _RecoveryChart extends StatelessWidget {
       );
     }).toList();
 
-    return SizedBox(
-      height: 160,
-      child: BarChart(
-        BarChartData(
-          backgroundColor: Colors.transparent,
-          borderData: FlBorderData(show: false),
-          gridData: const FlGridData(show: false),
-          maxY: 100,
-          titlesData: FlTitlesData(
-            bottomTitles: AxisTitles(
-              sideTitles: SideTitles(
-                showTitles: true,
-                reservedSize: 22,
-                getTitlesWidget: (val, _) {
-                  final i = val.toInt();
-                  if (i < 0 || i >= keys.length) return const SizedBox.shrink();
-                  return Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Text(keys[i].substring(0, min(4, keys[i].length)),
-                        style: AppTextStyles.chipLabel.copyWith(fontSize: 9)),
-                  );
-                },
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          height: 140,
+          child: BarChart(
+            BarChartData(
+              backgroundColor: Colors.transparent,
+              borderData: FlBorderData(show: false),
+              gridData: const FlGridData(show: false),
+              maxY: 100,
+              titlesData: FlTitlesData(
+                bottomTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 22,
+                    getTitlesWidget: (val, _) {
+                      final i = val.toInt();
+                      if (i < 0 || i >= keys.length) {
+                        return const SizedBox.shrink();
+                      }
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                            keys[i].substring(0, min(4, keys[i].length)),
+                            style:
+                                AppTextStyles.chipLabel.copyWith(fontSize: 9)),
+                      );
+                    },
+                  ),
+                ),
+                leftTitles:
+                    const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                topTitles:
+                    const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                rightTitles:
+                    const AxisTitles(sideTitles: SideTitles(showTitles: false)),
               ),
+              barGroups: groups,
             ),
-            leftTitles:
-                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-            topTitles:
-                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-            rightTitles:
-                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
           ),
-          barGroups: groups,
         ),
-      ),
+        // GAP-08 FIX: _RecoveryChart only rendered pre/post bar heights and
+        // never read the 'delta' key. The '+25% MORNING' trending labels
+        // visible in the design were never rendered. Added a delta row below
+        // each bar group, coloured green for positive delta, red for negative.
+        const SizedBox(height: 6),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: keys.map((k) {
+            final delta = periods[k]!['delta'] ?? 0;
+            final isPos = delta >= 0;
+            final label = '${isPos ? '+' : ''}${delta.toStringAsFixed(0)}%';
+            return Text(
+              label,
+              style: AppTextStyles.chipLabel.copyWith(
+                fontSize: 9,
+                color: isPos ? AppColors.red : AppColors.textMuted,
+                fontWeight: FontWeight.bold,
+              ),
+            );
+          }).toList(),
+        ),
+      ],
     );
   }
 }

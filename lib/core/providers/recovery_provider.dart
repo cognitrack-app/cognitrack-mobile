@@ -62,18 +62,23 @@ class RecoveryProvider extends ChangeNotifier {
   // Axes: Dopamine, Focus, Recovery, WM Strain, Sleep (in order)
 
   List<double> get radarValues {
-    final load = today?.cognitiveLoadPct ?? 0;
-    final wm = today?.wmCapacityRemaining ?? 100;
+    final load    = today?.cognitiveLoadPct ?? 0;
+    final wm      = today?.wmCapacityRemaining ?? 100;
     final residue = today?.residueAtEOD ?? 0;
-    final screen = today?.totalScreenTime ?? 8;
+    final screen  = today?.totalScreenTime ?? 8;
 
-    final dopamine = max(0.0, 1 - (load / 100)); // inverse of load
-    final focus = (wm / 100).clamp(0.0, 1.0);
-    final recovery = max(0.0, 1 - residue);
-    final wmStrain = max(0.0, 1 - (wm / 100)); // inverted for radar
-    final sleep = max(0.0, (1 - (screen / 16))).clamp(0.0, 1.0); // approx
+    // GAP-01 FIX: _RadarPentagonPainter maps value[i] → label[i].
+    // Labels array (recovery_screen.dart): ['FOCUS','RECOVERY','WM STRAIN','SLEEP','DOPAMINE']
+    // Previous order was [dopamine, focus, recovery, wmStrain, sleep] — every
+    // axis was showing the wrong metric (e.g. dopamine value on the FOCUS axis).
+    // Reordered to match label indices exactly.
+    final focus    = (wm / 100).clamp(0.0, 1.0);                    // index 0 → FOCUS
+    final recovery = max(0.0, 1 - residue);                          // index 1 → RECOVERY
+    final wmStrain = max(0.0, 1 - (wm / 100));                      // index 2 → WM STRAIN
+    final sleep    = max(0.0, (1 - (screen / 16))).clamp(0.0, 1.0); // index 3 → SLEEP
+    final dopamine = max(0.0, 1 - (load / 100));                    // index 4 → DOPAMINE
 
-    return [dopamine, focus, recovery, wmStrain, sleep];
+    return [focus, recovery, wmStrain, sleep, dopamine];
   }
 
   // ── Countdown to next neural reset ───────────────────────────────────────
@@ -146,25 +151,49 @@ class RecoveryProvider extends ChangeNotifier {
   // ── Break quality report ──────────────────────────────────────────────────
 
   List<BreakQualityEntry> get breakQualityReport {
-    if (todayBreaks.isEmpty) {
-      // Return empty list instead of fake data
-      return [];
+    if (todayBreaks.isNotEmpty) {
+      return todayBreaks.asMap().entries.map((e) {
+        final event = e.value;
+        final dt = DateTime.fromMillisecondsSinceEpoch(event.timestamp);
+        final timeStr = DateFormat('hh:mm a').format(dt);
+        final before = today?.cognitiveLoadPct ?? 60;
+        final after = max(0.0, before - (event.durationMs / 60000 * 2));
+        return BreakQualityEntry(
+          time: timeStr,
+          breakType: _breakTypeLabel(e.key),
+          recoveryDeltaPts: before - after,
+          beforePct: before,
+          afterPct: after,
+          effectivePct: min(1.0, event.durationMs / 600000), // 10 min = 100%
+        );
+      }).toList();
     }
-    return todayBreaks.asMap().entries.map((e) {
-      final event = e.value;
-      final dt = DateTime.fromMillisecondsSinceEpoch(event.timestamp);
-      final timeStr = DateFormat('hh:mm a').format(dt);
-      final before = today?.cognitiveLoadPct ?? 60;
-      final after = max(0.0, before - (event.durationMs / 60000 * 2));
-      return BreakQualityEntry(
-        time: timeStr,
-        breakType: _breakTypeLabel(e.key),
-        recoveryDeltaPts: -(before - after),
-        beforePct: before,
-        afterPct: after,
-        effectivePct: min(1.0, event.durationMs / 600000), // 10min = 100%
-      );
-    }).toList();
+
+    // FUNC-07 FIX: The Android ForegroundService emits ACTIVITY_RESUMED /
+    // ACTIVITY_PAUSED events, not eventType='break', so todayBreaks is always
+    // empty on Android. Fall back to detecting recovery windows directly from
+    // the hourlyLoad array: an hour where load drops below 20 after being
+    // above 40 is a genuine low-load recovery window.
+    if (today == null) return [];
+    final hourly = today!.hourlyLoadList;
+    final entries = <BreakQualityEntry>[];
+    for (int i = 1; i < hourly.length - 1; i++) {
+      if (hourly[i] < 20 && hourly[i - 1] > 40) {
+        final timeStr = '${i.toString().padLeft(2, '0')}:00';
+        final before = hourly[i - 1];
+        final after = i + 1 < hourly.length ? hourly[i + 1] : hourly[i];
+        final delta = (before - after).clamp(0.0, 100.0);
+        entries.add(BreakQualityEntry(
+          time: timeStr,
+          breakType: _breakTypeLabel(entries.length),
+          recoveryDeltaPts: delta,
+          beforePct: before,
+          afterPct: after,
+          effectivePct: (delta / 100).clamp(0.0, 1.0),
+        ));
+      }
+    }
+    return entries;
   }
 
   String _breakTypeLabel(int i) {
@@ -177,6 +206,14 @@ class RecoveryProvider extends ChangeNotifier {
     return types[i % types.length];
   }
 
+  // ── Cross-device load ─────────────────────────────────────────────────────
+
+  /// GAP-10: FirestoreClient has zero read methods — pulling desktop session
+  /// data onto the phone is not supported at launch. Return an honest stub
+  /// so the UI row doesn't crash. Full implementation requires adding a
+  /// getDesktopMetrics(date) read method to FirestoreClient.
+  String get crossDeviceLoadLabel => 'Desktop sync — pending';
+
   // ── Tomorrow's readiness ──────────────────────────────────────────────────
 
   double get tomorrowReadiness =>
@@ -185,16 +222,31 @@ class RecoveryProvider extends ChangeNotifier {
   double get unclearedDebt => today?.cognitiveDebt ?? 0;
 
   String get readinessConclusion {
-    final r = tomorrowReadiness;
-    if (r > 70) {
-      return 'System optimized for high-performance tomorrow. '
-          'Neural pathways show effective recovery trajectory.';
+    final debt = today?.cognitiveDebt ?? 0;
+    final load  = today?.cognitiveLoadPct ?? 0;
+
+    // GAP-11 FIX: Old version returned generic tier text with no bedtime.
+    // UI design shows "Sleep before 11:30 PM to reach <40% baseline tomorrow."
+    // Compute a specific target bedtime: start from 23:00, subtract up to
+    // 90 minutes based on cognitive debt level so heavier debt → earlier bed.
+    final baseMinutes = 23 * 60; // 11:00 PM
+    final extraMinutes = ((debt / 50) * 30).clamp(0, 90).round(); // 0–90 min earlier
+    final targetMinutes = baseMinutes - extraMinutes;
+    final tH = targetMinutes ~/ 60;
+    final tM = targetMinutes % 60;
+    final amPm = tH < 12 ? 'AM' : 'PM';
+    final displayH = tH % 12 == 0 ? 12 : tH % 12;
+    final timeStr = '$displayH:${tM.toString().padLeft(2, '0')} $amPm';
+
+    if (load > 60) {
+      return 'Sleep before $timeStr to reach <40% baseline tomorrow. '
+          'High cognitive debt requires extended neural restoration.';
     }
-    if (r > 40) {
-      return 'Moderate recovery expected. Consider extending '
-          'wind-down protocols for improved baseline restoration.';
+    if (load > 30) {
+      return 'Sleep before $timeStr for optimal recovery. '
+          'Moderate debt accumulation detected — wind-down protocol recommended.';
     }
-    return 'High cognitive debt detected. Neural restoration protocol '
-        'strongly recommended before tomorrow\'s peak workload.';
+    return 'Neural pathways showing effective recovery. '
+        'Maintain current sleep schedule for peak performance tomorrow.';
   }
 }

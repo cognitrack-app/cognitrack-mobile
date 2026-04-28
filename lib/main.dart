@@ -18,28 +18,30 @@ import 'firebase_options.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
+  // BUG-15: initialise Firebase (and error tracking) BEFORE loading optional
+  // assets. If font loading throws, Crashlytics is already running to capture
+  // the failure — previously it was never initialised in that path.
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+
+  // Font preloading is best-effort: a network failure here is non-fatal.
   await Future.wait([
     GoogleFonts.pendingFonts([
       GoogleFonts.inter(),
       GoogleFonts.jetBrainsMono(),
     ]),
-  ]);
-
-  // Initialise Firebase
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  ]).catchError((_) => <List<void>>[/* fonts are optional — fallback fonts will be used */]);
 
   // Bootstrap core services
   final store = SQLiteStore();
   final firestoreClient = FirestoreClient();
   final syncEngine = SyncEngine(store: store, client: firestoreClient);
 
-  // Start 15-minute sync timer
-  syncEngine.start();
-
-  // Register device whenever user signs in
+  // BUG-14: register auth listener BEFORE start() so the connectivity-restore
+  // path inside start() cannot fire _flushPendingQueue() before device
+  // registration has been attempted.
   FirebaseAuth.instance.authStateChanges().listen((user) {
     if (user != null) {
       // ignore: unawaited_futures — intentional fire-and-forget
@@ -48,6 +50,9 @@ Future<void> main() async {
       });
     }
   });
+
+  // Start 15-minute sync timer after the auth listener is wired up.
+  syncEngine.start();
 
   if (io.Platform.isAndroid) {
     final collector = UsageStatsCollector();
@@ -65,9 +70,46 @@ Future<void> main() async {
     });
     if (await collector.hasPermission()) {
       await collector.startForegroundService();
+
+      // FUNC-03 FIX: The ForegroundService is push-only and takes up to 60 s
+      // to deliver its first batch. On the first open of the day (or after a
+      // restart) SQLite is empty and the dashboard shows nothing.
+      //
+      // Backfill events from midnight → now immediately so the dashboard has
+      // real data from the first frame. Errors are non-fatal (best-effort).
+      try {
+        final now = DateTime.now();
+        final midnight = DateTime(now.year, now.month, now.day);
+        final backfillEvents = await collector.queryEvents(
+          startMs: midnight.millisecondsSinceEpoch,
+          endMs: now.millisecondsSinceEpoch,
+        );
+        for (final event in backfillEvents) {
+          await store.insertEvent(RawEventInsert(
+            timestamp: event.timestamp,
+            appId: event.appId,
+            category: event.category.name,
+            eventType: event.eventType.name,
+            durationMs: event.durationMs,
+            deviceType: event.deviceType.name,
+          ));
+        }
+        // Trigger an immediate sync so today's data reaches Firestore now.
+        syncEngine.syncNow().catchError(
+          (Object e) => debugPrint('[main] initial backfill sync error: $e'),
+        );
+      } catch (e) {
+        debugPrint('[main] FUNC-03 backfill error (non-fatal): $e');
+      }
     }
   } else if (io.Platform.isIOS) {
-    ManualSessionLogger(store: store).start();
+    // BUG-C: retain the instance (not created inline) so any internal timers /
+    // subscriptions are not orphaned and eligible for GC. Also guard start()
+    // with hasPermission(), matching the Android pattern structurally.
+    final iosLogger = ManualSessionLogger(store: store);
+    if (await iosLogger.hasPermission()) {
+      iosLogger.start();
+    }
   }
 
   final prefs = await SharedPreferences.getInstance();

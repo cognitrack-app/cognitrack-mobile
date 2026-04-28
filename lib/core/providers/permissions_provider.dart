@@ -3,7 +3,6 @@
 library;
 
 import 'dart:io' as io;
-import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import '../../platform/android/usage_stats_collector.dart';
 
@@ -40,7 +39,7 @@ class PermissionsProvider extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  Future<void> check() async {
+  Future<void> check({bool skipServiceStart = false}) async {
     if (io.Platform.isIOS) {
       _hasPermission = true;
       _isChecked = true;
@@ -51,7 +50,13 @@ class PermissionsProvider extends ChangeNotifier with WidgetsBindingObserver {
     _hasPermission = await collector.hasPermission();
     _isChecked = true;
 
-    if (_hasPermission) {
+    // MISS-02 FIX: main.dart calls startForegroundService() before runApp().
+    // check() previously always called it again unconditionally, resulting in
+    // two back-to-back service start intents on every cold launch for users
+    // who already have permission. Two starts can cause duplicate event batches
+    // in the first polling cycle. skipServiceStart: true lets main.dart signal
+    // that the service is already running so we skip the redundant start.
+    if (_hasPermission && !skipServiceStart) {
       await collector.startForegroundService();
     }
     notifyListeners();
