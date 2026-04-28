@@ -110,26 +110,42 @@ class AnalyticsProvider extends ChangeNotifier {
   /// Returns map with periods: morning/noon/afternoon/evening → {pre, post} pairs
 
   Map<String, Map<String, double>> get recoveryCoeff {
+    final bars = todayHourlyBars;
+
+    // GAP-12 FIX: Old code used postEff(pre) = (pre * 1.30).clamp(0, 100).
+    // This made every period always show exactly +30% regardless of actual
+    // usage — the chart was entirely fabricated. Users with no breaks still
+    // showed +30%, which was actively misleading.
+    //
+    // Real approach: split each time window in half. Pre-break efficiency =
+    // inverse load of the first half; post-break efficiency = inverse load
+    // of the second half. Delta is the actual change between the two.
+    Map<String, double> period(int from, int to) {
+      final mid = (from + to) ~/ 2;
+      final safeEnd = min(to, bars.length);
+      final safeMid = min(mid, bars.length);
+
+      final preSlice  = bars.sublist(from < bars.length ? from : bars.length - 1, safeMid)
+          .where((v) => v > 0).toList();
+      final postSlice = bars.sublist(safeMid, safeEnd)
+          .where((v) => v > 0).toList();
+
+      final preLoad  = preSlice.isEmpty  ? 50.0 : preSlice.reduce((a, b) => a + b) / preSlice.length;
+      final postLoad = postSlice.isEmpty ? 50.0 : postSlice.reduce((a, b) => a + b) / postSlice.length;
+
+      // Efficiency = inverse of load (low load = high efficiency)
+      final preEff  = (100 - preLoad).clamp(0.0, 100.0);
+      final postEff = (100 - postLoad).clamp(0.0, 100.0);
+      final delta   = preEff == 0 ? 0.0 : ((postEff - preEff) / preEff * 100);
+
+      return {'pre': preEff, 'post': postEff, 'delta': delta};
+    }
+
     if (_today == null) {
       return {
         for (final k in ['Morning', 'Noon', 'Afternoon', 'Evening'])
           k: {'pre': 0, 'post': 0, 'delta': 0},
       };
-    }
-    final bars = todayHourlyBars;
-    double avgLoad(int from, int to) {
-      final slice = bars.sublist(from, min(to, bars.length));
-      return slice.isEmpty ? 0 : slice.reduce((a, b) => a + b) / slice.length;
-    }
-    double eff(double load) => ((100 - load) / 100 * 100).clamp(0.0, 100.0);
-    double postEff(double pre) => (pre * 1.30).clamp(0.0, 100.0);
-    double delta(double pre, double pst) =>
-        pre == 0 ? 0 : ((pst - pre) / pre * 100);
-
-    Map<String, double> period(int from, int to) {
-      final pre = eff(avgLoad(from, to));
-      final pst = postEff(pre);
-      return {'pre': pre, 'post': pst, 'delta': delta(pre, pst)};
     }
 
     return {

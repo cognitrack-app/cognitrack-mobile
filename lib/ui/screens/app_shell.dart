@@ -42,6 +42,7 @@ class AppShell extends StatelessWidget {
             surfaceTintColor: Colors.transparent,
             shadowColor: Colors.transparent,
             selectedIndex: idx,
+            labelBehavior: NavigationDestinationLabelBehavior.alwaysHide,
             onDestinationSelected: (i) {
               const routes = [
                 '/dashboard',
@@ -55,8 +56,7 @@ class AppShell extends StatelessWidget {
               _navDest(0, idx, Icons.home_outlined, Icons.home, 'Home'),
               _navDest(1, idx, Icons.show_chart_outlined, Icons.show_chart,
                   'Analytics'),
-              _navDest(2, idx, Icons.grid_view_outlined, Icons.grid_view,
-                  'Recovery'),
+              _navDest(2, idx, Icons.hub_outlined, Icons.hub, 'Recovery'),
               _navDest(3, idx, Icons.self_improvement_outlined,
                   Icons.self_improvement, 'Sanctuary'),
             ],

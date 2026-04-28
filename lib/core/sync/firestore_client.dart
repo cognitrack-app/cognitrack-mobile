@@ -59,21 +59,26 @@ class FirestoreClient {
         .collection('devices')
         .doc(deviceId);
 
-    // Check existence before writing so registeredAt is set only once.
-    final existing = await docRef.get();
+    // BUG-07: use a transaction so the existence check + conditional write are
+    // atomic. Concurrent rapid relaunches can no longer both see !exists and
+    // both stamp registeredAt, which would overwrite the original timestamp.
+    await _firestore.runTransaction((txn) async {
+      final snapshot = await txn.get(docRef);
 
-    final data = <String, dynamic>{
-      'platform': platform,
-      'displayName': displayName,
-      'lastSeen': FieldValue.serverTimestamp(),
-      'agentType': 'phone',
-    };
+      final data = <String, dynamic>{
+        'platform': platform,
+        'displayName': displayName,
+        'lastSeen': FieldValue.serverTimestamp(),
+        'agentType': 'phone',
+      };
 
-    if (!existing.exists) {
-      data['registeredAt'] = FieldValue.serverTimestamp();
-    }
+      if (!snapshot.exists) {
+        // First registration — stamp registeredAt once and only once.
+        data['registeredAt'] = FieldValue.serverTimestamp();
+      }
 
-    await docRef.set(data, SetOptions(merge: true));
+      txn.set(docRef, data, SetOptions(merge: true));
+    });
   }
 
   /// Update lastSeen on every sync.

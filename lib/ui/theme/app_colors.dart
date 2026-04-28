@@ -10,6 +10,7 @@ abstract final class AppColors {
   static const surface = Color(0xFF161618);
   static const surfaceHigh = Color(0xFF1E1E22);
   static const surfaceDim = Color(0xFF111113);
+  static const surfaceDeepRed = Color(0xFF1A0808); // hero cog-debt card tint
 
   // ── Brand ───────────────────────────────────────────────────────────────────
   static const red = Color(0xFFE53935);

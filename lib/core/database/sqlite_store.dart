@@ -46,7 +46,9 @@ class DailyMetricsRow {
   final int totalPickups;
   final double totalScreenTime; // hours
   final double switchVelocityPeak;
-  final int peakLoadHour;
+  // BUG-08: nullable — -1 is the SQLite sentinel meaning "no events today".
+  // fromMap converts -1 → null; toMap converts null → -1.
+  final int? peakLoadHour;
   final String hourlyLoad; // JSON array [24 numbers]
   final String categoryBreakdown; // JSON object
   final int synced; // 0 = pending, 1 = synced
@@ -79,7 +81,10 @@ class DailyMetricsRow {
         totalPickups: m['totalPickups'] as int? ?? 0,
         totalScreenTime: (m['totalScreenTime'] as num?)?.toDouble() ?? 0,
         switchVelocityPeak: (m['switchVelocityPeak'] as num).toDouble(),
-        peakLoadHour: m['peakLoadHour'] as int,
+        // BUG-08: -1 is the sentinel stored for "no events" days.
+        peakLoadHour: (m['peakLoadHour'] as int) == -1
+            ? null
+            : (m['peakLoadHour'] as int),
         hourlyLoad: m['hourlyLoad'] as String,
         categoryBreakdown: m['categoryBreakdown'] as String,
         synced: m['synced'] as int,
@@ -96,7 +101,8 @@ class DailyMetricsRow {
         'totalPickups': totalPickups,
         'totalScreenTime': totalScreenTime,
         'switchVelocityPeak': switchVelocityPeak,
-        'peakLoadHour': peakLoadHour,
+        // BUG-08: store -1 for null (no-events day); never a valid clock hour
+        'peakLoadHour': peakLoadHour ?? -1,
         'hourlyLoad': hourlyLoad,
         'categoryBreakdown': categoryBreakdown,
         'synced': synced,
@@ -424,6 +430,21 @@ class SQLiteStore {
         'retryCount': retryCount,
         'nextRetryAt': nextRetryAt ?? delay,
       },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  /// B2 FIX: Replace the payload of an existing pending-sync row with a
+  /// fresher one, while preserving the existing retryCount and backoff
+  /// schedule. Called by _enqueuePendingSync() when the device stays offline
+  /// across multiple 15-min sync cycles so the final reconnect push sends
+  /// end-of-day data rather than the stale 09:00 snapshot.
+  Future<void> updatePendingSyncPayload(int id, String payload) async {
+    final db = await _database;
+    await db.update(
+      'pending_sync',
+      {'payload': payload},
       where: 'id = ?',
       whereArgs: [id],
     );

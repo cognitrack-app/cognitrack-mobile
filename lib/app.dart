@@ -45,7 +45,10 @@ class _CogniTrackAppState extends State<CogniTrackApp> {
   void initState() {
     super.initState();
     _authProvider = AuthProvider();
-    _permissionsProvider = PermissionsProvider()..check();
+    // MISS-02 FIX: main.dart calls startForegroundService() before runApp().
+    // Pass skipServiceStart: true so check() does not start the service again
+    // and cause duplicate event batches in the first polling cycle.
+    _permissionsProvider = PermissionsProvider()..check(skipServiceStart: true);
     _dashboardProvider = DashboardProvider(
       store: widget.sqliteStore,
       sync: widget.syncEngine,
@@ -56,6 +59,9 @@ class _CogniTrackAppState extends State<CogniTrackApp> {
 
   @override
   void dispose() {
+    // BUG-02: stop() cancels the 15-min timer, connectivity subscription,
+    // and removes the WidgetsBindingObserver — prevents timer/observer leak.
+    widget.syncEngine.stop();
     _authProvider.dispose();
     _permissionsProvider.dispose();
     _dashboardProvider.dispose();

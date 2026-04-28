@@ -23,11 +23,14 @@ class RecoveryScreen extends StatefulWidget {
 }
 
 class _RecoveryScreenState extends State<RecoveryScreen> {
+  // FUNC-08 FIX: Same as AnalyticsScreen — replace initState with
+  // didChangeDependencies so RecoveryProvider.load() re-fires on every
+  // tab re-visit, not just the first insert.
   @override
-  void initState() {
-    super.initState();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<RecoveryProvider>().load();
+      if (mounted) context.read<RecoveryProvider>().load();
     });
   }
 
@@ -56,6 +59,37 @@ class _RecoveryScreenState extends State<RecoveryScreen> {
   Widget _buildHeader(RecoveryProvider p) => Padding(
         padding: const EdgeInsets.fromLTRB(AppSpacing.lg, 12, AppSpacing.lg, 0),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(
+            children: [
+              Text('COGNITRACK',
+                  style: AppTextStyles.display.copyWith(fontSize: 14)),
+              const Spacer(),
+              Stack(
+                alignment: Alignment.center,
+                children: [
+                  const Icon(Icons.notifications_outlined,
+                      color: AppColors.textSecondary),
+                  Positioned(
+                    right: 0,
+                    top: 0,
+                    child: Container(
+                      padding: const EdgeInsets.all(2),
+                      decoration: const BoxDecoration(
+                        color: AppColors.red,
+                        shape: BoxShape.circle,
+                      ),
+                      constraints:
+                          const BoxConstraints(minWidth: 12, minHeight: 12),
+                      child: const Text('14',
+                          style: TextStyle(color: Colors.white, fontSize: 8),
+                          textAlign: TextAlign.center),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.sm),
           const NtLabel('PROTOCOL MODULE'),
           const SizedBox(height: AppSpacing.xs),
           Row(children: [
@@ -98,11 +132,11 @@ class _RecoveryScreenState extends State<RecoveryScreen> {
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                'Dopamine',
-                'Focus',
-                'Recovery',
-                'WM Strain',
-                'Sleep',
+                'FOCUS',
+                'RECOVERY',
+                'WM STRAIN',
+                'SLEEP',
+                'DOPAMINE',
               ]
                   .asMap()
                   .entries
@@ -229,6 +263,14 @@ class _RecoveryScreenState extends State<RecoveryScreen> {
             const SizedBox(height: AppSpacing.md),
             if (p.loading)
               const ShimmerList(count: 2, itemHeight: 60)
+            else if (p.breakQualityReport.isEmpty)
+              SizedBox(
+                height: 60,
+                child: Center(
+                  child: Text('No breaks detected today',
+                      style: AppTextStyles.body),
+                ),
+              )
             else
               ListView.separated(
                 shrinkWrap: true,
@@ -254,10 +296,22 @@ class _RecoveryScreenState extends State<RecoveryScreen> {
                       Column(
                           crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
-                            Text(
-                              'Recovery: ${entry.recoveryDeltaPts.toStringAsFixed(0)}pts',
-                              style: AppTextStyles.deltaLabel
-                                  .copyWith(color: AppColors.good),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.end,
+                              children: [
+                                if (entry.recoveryDeltaPts < 0)
+                                  const Icon(Icons.warning_amber,
+                                      size: 12, color: AppColors.warn),
+                                if (entry.recoveryDeltaPts < 0)
+                                  const SizedBox(width: 4),
+                                Text(
+                                  'Recovery: ${entry.recoveryDeltaPts.toStringAsFixed(0)}pts',
+                                  style: AppTextStyles.deltaLabel.copyWith(
+                                      color: entry.recoveryDeltaPts < 0
+                                          ? AppColors.warn
+                                          : AppColors.good),
+                                ),
+                              ],
                             ),
                             Text(
                               '${entry.beforePct.toStringAsFixed(0)}% → '
@@ -330,6 +384,9 @@ class _RecoveryScreenState extends State<RecoveryScreen> {
                 AppColors.red,
                 'Uncleared debt tonight',
                 '${p.unclearedDebt.toStringAsFixed(0)}pts'),
+            const SizedBox(height: 6),
+            _readinessRow(Icons.warning_outlined, AppColors.warn,
+                'Cross-device load', p.crossDeviceLoadLabel),
             const SizedBox(height: 6),
             _readinessRow(Icons.check_circle_outline, AppColors.good,
                 'Circadian alignment', 'Good (EST.)'),
@@ -578,7 +635,8 @@ class _EfficiencyChart extends StatelessWidget {
         lineBarsData: [
           LineChartBarData(
             spots: spots,
-            isCurved: false,
+            isCurved: true,
+            curveSmoothness: 0.3,
             color: AppColors.red,
             barWidth: 1.5,
             dotData: const FlDotData(show: false),
@@ -641,9 +699,35 @@ class _DebtArcChart extends StatelessWidget {
             label: VerticalLineLabel(
               show: true,
               alignment: Alignment.topRight,
-              labelResolver: (_) => 'Peak',
+              labelResolver: (_) => 'Context Switch Peak',
               style: AppTextStyles.chipLabel
                   .copyWith(color: AppColors.red, fontSize: 8),
+            ),
+          ),
+          VerticalLine(
+            x: (peakHour + 2).toDouble(),
+            color: AppColors.good.withValues(alpha: 0.7),
+            strokeWidth: 1,
+            dashArray: [4, 4],
+            label: VerticalLineLabel(
+              show: true,
+              alignment: Alignment.topRight,
+              labelResolver: (_) => 'Neural Reset Detected',
+              style: AppTextStyles.chipLabel
+                  .copyWith(color: AppColors.good, fontSize: 8),
+            ),
+          ),
+          VerticalLine(
+            x: (peakHour + 5).toDouble(),
+            color: AppColors.warn.withValues(alpha: 0.7),
+            strokeWidth: 1,
+            dashArray: [4, 4],
+            label: VerticalLineLabel(
+              show: true,
+              alignment: Alignment.topRight,
+              labelResolver: (_) => 'Break 3 — Phone opened — No recovery',
+              style: AppTextStyles.chipLabel
+                  .copyWith(color: AppColors.warn, fontSize: 8),
             ),
           ),
         ]),

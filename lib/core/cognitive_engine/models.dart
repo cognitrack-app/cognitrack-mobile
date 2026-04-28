@@ -91,14 +91,14 @@ class CognitiveState {
   double residue; // Attention residue [0–1]
   double focusDepth; // Accumulated deep focus [0–30]
   int lastSwitchTs; // Timestamp of last context switch (ms)
-  int lastResiduDecayTs; // For exponential decay calculation (ms)
+  // NOTE: lastResiduDecayTs removed (BUG-10) — was never read; decay uses
+  // lastSwitchTs for the timeSinceLast calculation inside applySwitch().
 
   CognitiveState({
     required this.wmCapacity,
     required this.residue,
     required this.focusDepth,
     required this.lastSwitchTs,
-    required this.lastResiduDecayTs,
   });
 }
 
@@ -108,7 +108,8 @@ class CognitiveReport {
   final double wmCapacityRemaining;
   final double residueAtEOD; // 0–1
   final List<double> hourlyDebt; // 24-element, each 0–100
-  final int peakLoadHour; // 0–23
+  // BUG-08: nullable — null means no events, 0 means midnight was peak hour.
+  final int? peakLoadHour; // 0–23, or null if no events that day
 
   const CognitiveReport({
     required this.cognitiveDebt,
@@ -163,7 +164,8 @@ class PhoneSyncPayload {
   final int totalPickups;
   final double switchVelocityPeak;
   final CategoryBreakdown categoryBreakdown;
-  final int peakLoadHour;
+  // BUG-08: nullable — null means no events recorded for this day.
+  final int? peakLoadHour; // 0–23, or null if no events that day
   final List<double> hourlyLoad; // 24-element 0–100
   final String lastUpdated; // ISO timestamp
 
