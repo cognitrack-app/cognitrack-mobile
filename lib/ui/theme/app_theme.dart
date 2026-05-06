@@ -13,50 +13,81 @@ abstract final class AppTheme {
         brightness: Brightness.dark,
         scaffoldBackgroundColor: AppColors.bg,
         colorScheme: const ColorScheme.dark(
-          primary: AppColors.red,
-          secondary: AppColors.red,
+          primary: AppColors.primary,
+          primaryContainer: AppColors.primaryContainer,
+          secondary: AppColors.primary,
           surface: AppColors.surface,
           error: AppColors.critical,
-          onPrimary: Colors.white,
+          onPrimary: AppColors.bg,
           onSurface: AppColors.textPrimary,
         ),
         fontFamily: GoogleFonts.inter().fontFamily,
+        textTheme: TextTheme(
+          displayLarge: AppTextStyles.displayLg,
+          displayMedium: AppTextStyles.display,
+          headlineMedium: AppTextStyles.sectionHead,
+          titleMedium: AppTextStyles.cardTitle,
+          bodyLarge: AppTextStyles.body,
+          bodyMedium: AppTextStyles.body,
+          labelSmall: AppTextStyles.chipLabel,
+        ),
+        // The "No-Line" Rule for Cards
         cardTheme: const CardThemeData(
           color: AppColors.surface,
           elevation: 0,
           margin: EdgeInsets.zero,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.all(Radius.circular(AppSpacing.cardR)),
+            side: BorderSide.none, // Explicitly no borders
           ),
         ),
-        dividerColor: AppColors.border,
+        // M01 FIX: divider must use outlineVariant so row separators in
+        // Recovery break-quality list are visible.
+        dividerTheme: const DividerThemeData(
+          color: AppColors.outlineVariant,
+          space: 24,
+          thickness: 0.5,
+        ),
+        // The "No-Line" Rule for Inputs (Ghost Border on focus)
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
           fillColor: AppColors.surface,
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(AppSpacing.cardR),
-            borderSide: const BorderSide(color: AppColors.border),
+            borderSide: BorderSide.none,
           ),
           enabledBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(AppSpacing.cardR),
-            borderSide: const BorderSide(color: AppColors.border),
+            borderSide: BorderSide.none,
           ),
           focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(AppSpacing.cardR),
-            borderSide: const BorderSide(color: AppColors.red, width: 1.5),
+            borderSide: BorderSide(
+              color: AppColors.outlineVariant.withValues(alpha: 0.15),
+              width: 1,
+            ),
           ),
-          labelStyle: AppTextStyles.chipLabel,
-          hintStyle: AppTextStyles.body,
+          errorBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(AppSpacing.cardR),
+            borderSide: const BorderSide(color: AppColors.critical, width: 1),
+          ),
+          labelStyle: AppTextStyles.labelSm,
+          hintStyle: AppTextStyles.body.copyWith(height: 1.0),
         ),
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ElevatedButton.styleFrom(
-            backgroundColor: AppColors.red,
+            backgroundColor: AppColors.primaryContainer,
             foregroundColor: Colors.white,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(AppSpacing.cardR),
+              side: BorderSide(
+                color:
+                    AppColors.primary.withValues(alpha: 0.15), // Ghost Border
+              ),
             ),
             padding: const EdgeInsets.symmetric(vertical: 14),
             textStyle: AppTextStyles.cardTitle,
+            elevation: 0,
           ),
         ),
         textButtonTheme: TextButtonThemeData(
@@ -77,7 +108,7 @@ abstract final class AppTheme {
           }),
           labelTextStyle: WidgetStateProperty.resolveWith((states) {
             if (states.contains(WidgetState.selected)) {
-              return AppTextStyles.chipLabel.copyWith(color: AppColors.red);
+              return AppTextStyles.chipLabel.copyWith(color: AppColors.primary);
             }
             return AppTextStyles.chipLabel;
           }),

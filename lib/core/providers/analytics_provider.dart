@@ -1,4 +1,5 @@
 /// AnalyticsProvider — switch velocity bars, heatmap grid, brain load metrics.
+/// Reads live data from SQLiteStore (written by SyncEngine every 15 min).
 library;
 
 import 'dart:convert';
@@ -19,22 +20,32 @@ class AnalyticsProvider extends ChangeNotifier {
   // ── Load ──────────────────────────────────────────────────────────────────
 
   Future<void> load() async {
-    loading = true;
+    // Only show shimmer on the very first load (no data yet).
+    // Subsequent calls (refresh) must NOT flash loading=true or the screen
+    // flickers back to shimmer while perfectly good data is already visible.
+    final firstLoad = last7Days.isEmpty;
+    if (firstLoad) {
+      loading = true;
+      notifyListeners();
+      await Future.delayed(const Duration(milliseconds: 300));
+    }
     error = null;
-    notifyListeners();
 
     try {
-      last7Days = (await _store.getMetricsHistory(days: 7)).reversed.toList();
+      // getMetricsHistory returns DESC (newest first) — reverse for oldest-first
+      // chart order (index 0 = 6 days ago, index 6 = today).
+      final raw = await _store.getMetricsHistory(days: 7);
+      last7Days = raw.reversed.toList();
     } catch (e, st) {
-      error = e.toString();
       debugPrint('[AnalyticsProvider] load error: $e\n$st');
-    } finally {
-      loading = false;
-      notifyListeners();
+      error = e.toString();
     }
+
+    loading = false;
+    notifyListeners();
   }
 
-  // ── Today's hourly bars (24 values) ──────────────────────────────────────
+  // ── Today's hourly bars (24 values) ────────────────────────────────
 
   DailyMetricsRow? get _today => last7Days.isNotEmpty ? last7Days.last : null;
 
@@ -49,10 +60,9 @@ class AnalyticsProvider extends ChangeNotifier {
     }
   }
 
-  /// Count of hours exceeding the breach threshold (80%)
   int get breachCount => todayHourlyBars.where((v) => v > 80).length;
 
-  // ── Temporal heatmap — 7 × 24 matrix ─────────────────────────────────────
+  // ── Temporal heatmap — 7 × 24 matrix ─────────────────────────────────
 
   List<List<double>> get heatmapGrid {
     return last7Days.map((row) {
@@ -77,7 +87,6 @@ class AnalyticsProvider extends ChangeNotifier {
     return peak;
   }
 
-  /// (row, col) of the peak cell in the 7×24 grid
   (int, int) get heatmapPeakCell {
     int pr = 0, pc = 0;
     double peak = 0;
@@ -93,7 +102,7 @@ class AnalyticsProvider extends ChangeNotifier {
     return (pr, pc);
   }
 
-  // ── Brain Load ────────────────────────────────────────────────────────────
+  // ── Brain Load ────────────────────────────────────────────────────────────────
 
   double get wmStrain => 100 - (_today?.wmCapacityRemaining ?? 100);
 
@@ -104,39 +113,36 @@ class AnalyticsProvider extends ChangeNotifier {
     return 'Low';
   }
 
-  double get neuralNoise => ((_today?.switchVelocityPeak ?? 0) * 0.155).clamp(0.0, 100.0);
+  double get neuralNoise =>
+      ((_today?.switchVelocityPeak ?? 0) * 0.155).clamp(0.0, 100.0);
 
-  // ── Recovery coefficient ──────────────────────────────────────────────────
-  /// Returns map with periods: morning/noon/afternoon/evening → {pre, post} pairs
+  // ── Recovery coefficient ────────────────────────────────────────────────────
 
   Map<String, Map<String, double>> get recoveryCoeff {
     final bars = todayHourlyBars;
 
-    // GAP-12 FIX: Old code used postEff(pre) = (pre * 1.30).clamp(0, 100).
-    // This made every period always show exactly +30% regardless of actual
-    // usage — the chart was entirely fabricated. Users with no breaks still
-    // showed +30%, which was actively misleading.
-    //
-    // Real approach: split each time window in half. Pre-break efficiency =
-    // inverse load of the first half; post-break efficiency = inverse load
-    // of the second half. Delta is the actual change between the two.
     Map<String, double> period(int from, int to) {
       final mid = (from + to) ~/ 2;
       final safeEnd = min(to, bars.length);
       final safeMid = min(mid, bars.length);
 
-      final preSlice  = bars.sublist(from < bars.length ? from : bars.length - 1, safeMid)
-          .where((v) => v > 0).toList();
-      final postSlice = bars.sublist(safeMid, safeEnd)
-          .where((v) => v > 0).toList();
+      final preSlice = bars
+          .sublist(from < bars.length ? from : bars.length - 1, safeMid)
+          .where((v) => v > 0)
+          .toList();
+      final postSlice =
+          bars.sublist(safeMid, safeEnd).where((v) => v > 0).toList();
 
-      final preLoad  = preSlice.isEmpty  ? 50.0 : preSlice.reduce((a, b) => a + b) / preSlice.length;
-      final postLoad = postSlice.isEmpty ? 50.0 : postSlice.reduce((a, b) => a + b) / postSlice.length;
+      final preLoad = preSlice.isEmpty
+          ? 50.0
+          : preSlice.reduce((a, b) => a + b) / preSlice.length;
+      final postLoad = postSlice.isEmpty
+          ? 50.0
+          : postSlice.reduce((a, b) => a + b) / postSlice.length;
 
-      // Efficiency = inverse of load (low load = high efficiency)
-      final preEff  = (100 - preLoad).clamp(0.0, 100.0);
+      final preEff = (100 - preLoad).clamp(0.0, 100.0);
       final postEff = (100 - postLoad).clamp(0.0, 100.0);
-      final delta   = preEff == 0 ? 0.0 : ((postEff - preEff) / preEff * 100);
+      final delta = preEff == 0 ? 0.0 : ((postEff - preEff) / preEff * 100);
 
       return {'pre': preEff, 'post': postEff, 'delta': delta};
     }
@@ -149,14 +155,14 @@ class AnalyticsProvider extends ChangeNotifier {
     }
 
     return {
-      'Morning':   period(6, 12),
-      'Noon':      period(12, 14),
+      'Morning': period(6, 12),
+      'Noon': period(12, 14),
       'Afternoon': period(14, 18),
-      'Evening':   period(18, 22),
+      'Evening': period(18, 22),
     };
   }
 
-  // ── Day labels for heatmap ────────────────────────────────────────────────
+  // ── Day labels for heatmap ───────────────────────────────────────────────
 
   List<String> get heatmapDayLabels {
     if (last7Days.isEmpty) return List.generate(7, (_) => '');

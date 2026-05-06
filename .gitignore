@@ -6,7 +6,8 @@
 build/
 *.g.dart
 *.freezed.dart
-pubspec.lock
+# pubspec.lock is intentionally committed for apps (not libraries)
+# to guarantee reproducible builds and prevent silent dependency drift.
 
 # IDE
 .idea/
@@ -34,3 +35,11 @@ android/captures/
 
 # Environment
 .env
+
+# Flutter-generated numbered duplicates (git merge artefacts)
+.flutter-plugins-dependencies [0-9]*
+ios/Flutter/Generated [0-9]*.xcconfig
+ios/Flutter/flutter_export_environment [0-9]*.sh
+
+# Generated analysis output
+analyze.txt

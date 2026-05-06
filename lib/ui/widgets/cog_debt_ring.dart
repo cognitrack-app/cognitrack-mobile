@@ -1,6 +1,6 @@
 /// CogDebtRing — premium 3D arc progress ring for the hero COG. DEBT PTS card.
-/// Animates from 0 → value every time the value changes.
-/// Uses Canvas only — no external packages, zero jank on Android.
+/// Rebuilt for the "Clinical Observer" design system.
+// ignore_for_file: prefer_const_literals_to_create_immutables
 library;
 
 import 'dart:math' as math;
@@ -75,10 +75,9 @@ class _CogDebtRingState extends State<CogDebtRing>
           child: Center(
             child: Text(
               '${_anim.value.round()}%',
-              style: AppTextStyles.chipLabel.copyWith(
-                color: AppColors.red,
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
+              style: AppTextStyles.labelSm.copyWith(
+                color: AppColors.primary,
+                fontSize: 12, // slightly larger for readability
               ),
             ),
           ),
@@ -97,26 +96,28 @@ class _RingPainter extends CustomPainter {
     final cx = size.width / 2;
     final cy = size.height / 2;
     final radius = (size.width / 2) - 5;
-    const strokeW = 4.5;
+    const strokeW = 4.0; // Thicker, 4px arc per Stitch design
     const startAngle = -math.pi / 2;
 
-    // Track
+    // Track - deep surface variant
     final trackPaint = Paint()
-      ..color = AppColors.border
+      ..color = AppColors.chartIdle
       ..style = PaintingStyle.stroke
       ..strokeWidth = strokeW
       ..strokeCap = StrokeCap.round;
     canvas.drawCircle(Offset(cx, cy), radius, trackPaint);
 
-    // Filled arc — red with glow
     final sweepAngle = 2 * math.pi * (percent.clamp(0, 100) / 100);
 
-    // Glow layer (wider, dimmer)
+    if (sweepAngle <= 0) return;
+
+    // Glow layer
     final glowPaint = Paint()
-      ..color = AppColors.red.withValues(alpha: 0.25)
+      ..color = AppColors.primaryContainer.withValues(alpha: 0.3)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = strokeW + 5
-      ..strokeCap = StrokeCap.round;
+      ..strokeWidth = strokeW + 8
+      ..strokeCap = StrokeCap.round
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
     canvas.drawArc(
       Rect.fromCircle(center: Offset(cx, cy), radius: radius),
       startAngle,
@@ -125,18 +126,17 @@ class _RingPainter extends CustomPainter {
       glowPaint,
     );
 
-    // Main arc
+    // Main arc - tapered gradient
     final arcPaint = Paint()
       ..shader = SweepGradient(
         startAngle: startAngle,
         endAngle: startAngle + (sweepAngle > 0 ? sweepAngle : 0.001),
         colors: [
-          AppColors.red.withValues(alpha: 0.7),
-          AppColors.red,
+          AppColors.chartIdle,
+          AppColors.primary,
         ],
         transform: const GradientRotation(-math.pi / 2),
-      ).createShader(Rect.fromCircle(
-          center: Offset(cx, cy), radius: radius))
+      ).createShader(Rect.fromCircle(center: Offset(cx, cy), radius: radius))
       ..style = PaintingStyle.stroke
       ..strokeWidth = strokeW
       ..strokeCap = StrokeCap.round;
@@ -147,6 +147,20 @@ class _RingPainter extends CustomPainter {
       false,
       arcPaint,
     );
+
+    // Neural Glow Point (Leading Edge)
+    final dx = cx + radius * math.cos(startAngle + sweepAngle);
+    final dy = cy + radius * math.sin(startAngle + sweepAngle);
+
+    final pointGlow = Paint()
+      ..color = AppColors.primaryContainer
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
+    canvas.drawCircle(Offset(dx, dy), 4, pointGlow);
+
+    final pointWhite = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(Offset(dx, dy), 2, pointWhite);
   }
 
   @override

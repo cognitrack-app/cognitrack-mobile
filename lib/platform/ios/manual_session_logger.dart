@@ -18,7 +18,7 @@ class ManualSessionLogger {
   Future<void> logFocusSession(int durationMinutes) async {
     final end = DateTime.now().millisecondsSinceEpoch;
     final start = end - (durationMinutes * 60000);
-    
+
     // Insert synthetic events for the session
     await store.insertEvent(RawEventInsert(
       timestamp: start,

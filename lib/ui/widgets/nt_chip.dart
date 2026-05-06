@@ -1,4 +1,5 @@
 /// Status badge chip — CRITICAL, HIGH VOLATILITY, etc.
+/// Stitch spec: "Use surface_container_highest for the background with no border."
 library;
 
 import 'package:flutter/material.dart';
@@ -10,12 +11,14 @@ class NtChip extends StatelessWidget {
   const NtChip(
     this.label, {
     super.key,
-    this.color = AppColors.red,
+    this.color = AppColors.primary,
     this.outlined = false,
   });
 
   final String label;
   final Color color;
+
+  /// [outlined] kept for API compatibility — now just adjusts text alpha.
   final bool outlined;
 
   @override
@@ -26,9 +29,10 @@ class NtChip extends StatelessWidget {
         vertical: 3,
       ),
       decoration: BoxDecoration(
-        color: outlined ? Colors.transparent : color.withValues(alpha: 0.18),
-        borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: color, width: 0.8),
+        // Stitch: surface_container_highest background, no border
+        color: AppColors.surfaceHigh.withValues(alpha: outlined ? 0.0 : 1.0),
+        borderRadius: BorderRadius.circular(AppSpacing.cardR),
+        // No explicit border — Stitch chip spec
       ),
       child: Text(
         label,

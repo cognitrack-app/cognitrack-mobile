@@ -1,8 +1,11 @@
-/// MorphMetricCard — a single metric cell with 3D morph card base,
+/// MorphMetricCard — a single metric cell with glassmorphism base,
 /// animated count-up value, label, and optional glow ring.
-/// Re-animates every time [value] changes (refresh, tab switch, etc.).
+/// Rebuilt for the "Clinical Observer" design system.
+/// BackdropFilter blur matches Stitch "Glass & Crimson" rule (20px).
 library;
 
+import 'dart:io' as io;
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'animated_metric_value.dart';
 import 'delta_badge.dart';
@@ -10,6 +13,7 @@ import 'nt_label.dart';
 import 'nt_chip.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_text_styles.dart';
+import '../theme/app_spacing.dart';
 
 class MorphMetricCard extends StatefulWidget {
   const MorphMetricCard({
@@ -55,7 +59,6 @@ class _MorphMetricCardState extends State<MorphMetricCard> {
   void didUpdateWidget(MorphMetricCard old) {
     super.didUpdateWidget(old);
     if (old.value != widget.value && _lastValue != null) {
-      // Re-play the card sweep animation every time the metric refreshes
       _cardKey.currentState?.replay();
     }
     _lastValue = widget.value;
@@ -70,17 +73,12 @@ class _MorphMetricCardState extends State<MorphMetricCard> {
   @override
   Widget build(BuildContext context) {
     final glow = widget.isCritical
-        ? AppColors.red
-        : (widget.glowColor ?? AppColors.red);
-
-    final borderColor = widget.isCritical
-        ? AppColors.borderRed
-        : AppColors.border;
+        ? AppColors.primaryContainer
+        : (widget.glowColor ?? AppColors.primaryContainer);
 
     return _MorphCardShell(
       key: _cardKey,
       glowColor: glow,
-      borderColor: borderColor,
       animateIn: true,
       animationDelay: widget.animationDelay,
       child: Column(
@@ -95,11 +93,11 @@ class _MorphMetricCardState extends State<MorphMetricCard> {
               ],
               NtLabel(widget.label,
                   color: widget.isCritical
-                      ? AppColors.red.withValues(alpha: 0.8)
+                      ? AppColors.primary.withValues(alpha: 0.8)
                       : null),
               if (widget.chipLabel != null) ...[
                 const Spacer(),
-                NtChip(widget.chipLabel!, color: AppColors.red),
+                NtChip(widget.chipLabel!, color: AppColors.primary),
               ],
             ],
           ),
@@ -109,19 +107,16 @@ class _MorphMetricCardState extends State<MorphMetricCard> {
             suffix: widget.suffix,
             decimals: widget.decimals,
             duration: const Duration(milliseconds: 950),
-            style: AppTextStyles.metricValue.copyWith(
-              color: widget.isCritical
-                  ? AppColors.red
-                  : AppColors.textPrimary,
-              fontSize: 26,
-              fontWeight: FontWeight.w800,
+            // Fix #10: Use raw display style (28px = 1.75rem per Stitch spec).
+            // Removed fontSize: 26 override.
+            style: AppTextStyles.display.copyWith(
+              color:
+                  widget.isCritical ? AppColors.primary : AppColors.textPrimary,
             ),
           ),
           if (widget.subText != null) ...[
             const SizedBox(height: 2),
-            Text(widget.subText!,
-                style:
-                    AppTextStyles.deltaLabel),
+            Text(widget.subText!, style: AppTextStyles.deltaLabel),
           ],
           if (widget.deltaLabel != null) ...[
             const SizedBox(height: 4),
@@ -139,14 +134,12 @@ class _MorphCardShell extends StatefulWidget {
     super.key,
     required this.child,
     required this.glowColor,
-    required this.borderColor,
     required this.animateIn,
     required this.animationDelay,
   });
 
   final Widget child;
   final Color glowColor;
-  final Color borderColor;
   final bool animateIn;
   final Duration animationDelay;
 
@@ -193,7 +186,6 @@ class _MorphCardState extends State<_MorphCardShell>
     }
   }
 
-  /// Called when metric data refreshes — re-triggers sweep + slide.
   void replay() {
     _ctrl.reset();
     _ctrl.forward();
@@ -214,44 +206,92 @@ class _MorphCardState extends State<_MorphCardShell>
           position: _slideAnim,
           child: AnimatedBuilder(
             animation: _sweepAnim,
-            builder: (context, child) => CustomPaint(
-              foregroundPainter:
-                  _SweepPainter(progress: _sweepAnim.value),
-              child: child,
-            ),
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(
-                    color: widget.borderColor, width: 0.8),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.4),
-                    blurRadius: 18,
-                    offset: const Offset(0, 6),
-                    spreadRadius: -4,
-                  ),
-                  BoxShadow(
-                    color: widget.glowColor.withValues(alpha: 0.07),
-                    blurRadius: 20,
-                    offset: Offset.zero,
-                  ),
-                ],
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    AppColors.surfaceHigh,
-                    AppColors.surface,
-                    AppColors.surfaceDim,
-                  ],
-                  stops: const [0.0, 0.55, 1.0],
+            builder: (context, child) {
+              if (_sweepAnim.value >= 1.0 || _sweepAnim.value <= 0.0) {
+                return child!;
+              }
+              return CustomPaint(
+                foregroundPainter: _SweepPainter(
+                  progress: _sweepAnim.value,
+                  radius: AppSpacing.cardR,
                 ),
-              ),
-              child: widget.child,
-            ),
+                child: child,
+              );
+            },
+            // BackdropFilter only on iOS — Android's GPU compositing
+            // repaints the blur layer on every frame tick, causing visible
+            // flicker. On Android we use a solid surface instead.
+            child: io.Platform.isAndroid
+                ? Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(AppSpacing.md),
+                    decoration: BoxDecoration(
+                      color: AppColors.surfaceContainerHigh,
+                      borderRadius: BorderRadius.circular(AppSpacing.cardR),
+                      border: Border.all(
+                        color: AppColors.outlineVariant.withValues(alpha: 0.15),
+                        width: 1.0,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color:
+                              AppColors.shadowCrimson.withValues(alpha: 0.06),
+                          blurRadius: 40,
+                          offset: const Offset(0, 8),
+                        ),
+                      ],
+                      gradient: RadialGradient(
+                        center: const Alignment(0.8, -0.8),
+                        radius: 1.5,
+                        colors: [
+                          widget.glowColor.withValues(alpha: 0.15),
+                          widget.glowColor.withValues(alpha: 0.05),
+                          Colors.transparent,
+                        ],
+                        stops: const [0.0, 0.4, 1.0],
+                      ),
+                    ),
+                    child: widget.child,
+                  )
+                : ClipRRect(
+                    borderRadius: BorderRadius.circular(AppSpacing.cardR),
+                    child: BackdropFilter(
+                      filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(AppSpacing.md),
+                        decoration: BoxDecoration(
+                          color:
+                              AppColors.surfaceLowest.withValues(alpha: 0.92),
+                          borderRadius: BorderRadius.circular(AppSpacing.cardR),
+                          border: Border.all(
+                            color: AppColors.outlineVariant
+                                .withValues(alpha: 0.15),
+                            width: 1.0,
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: AppColors.shadowCrimson
+                                  .withValues(alpha: 0.06),
+                              blurRadius: 40,
+                              offset: const Offset(0, 8),
+                            ),
+                          ],
+                          gradient: RadialGradient(
+                            center: const Alignment(0.8, -0.8),
+                            radius: 1.5,
+                            colors: [
+                              widget.glowColor.withValues(alpha: 0.15),
+                              widget.glowColor.withValues(alpha: 0.05),
+                              Colors.transparent,
+                            ],
+                            stops: const [0.0, 0.4, 1.0],
+                          ),
+                        ),
+                        child: widget.child,
+                      ),
+                    ),
+                  ),
           ),
         ),
       ),
@@ -260,8 +300,9 @@ class _MorphCardState extends State<_MorphCardShell>
 }
 
 class _SweepPainter extends CustomPainter {
-  const _SweepPainter({required this.progress});
+  const _SweepPainter({required this.progress, this.radius = 8.0});
   final double progress;
+  final double radius;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -269,7 +310,7 @@ class _SweepPainter extends CustomPainter {
     final sweepX = (progress * (size.width + 80)) - 40;
     final rrect = RRect.fromRectAndRadius(
       Rect.fromLTWH(0, 0, size.width, size.height),
-      const Radius.circular(16),
+      Radius.circular(radius),
     );
     final paint = Paint()
       ..shader = LinearGradient(
@@ -279,15 +320,14 @@ class _SweepPainter extends CustomPainter {
           Colors.white.withValues(alpha: 0.0),
         ],
         stops: const [0.0, 0.5, 1.0],
-      ).createShader(
-          Rect.fromLTWH(sweepX - 30, 0, 60, size.height));
+      ).createShader(Rect.fromLTWH(sweepX - 30, 0, 60, size.height));
     canvas.save();
     canvas.clipRRect(rrect);
-    canvas.drawRect(
-        Rect.fromLTWH(sweepX - 30, 0, 60, size.height), paint);
+    canvas.drawRect(Rect.fromLTWH(sweepX - 30, 0, 60, size.height), paint);
     canvas.restore();
   }
 
   @override
-  bool shouldRepaint(_SweepPainter old) => old.progress != progress;
+  bool shouldRepaint(_SweepPainter old) =>
+      old.progress != progress || old.radius != radius;
 }

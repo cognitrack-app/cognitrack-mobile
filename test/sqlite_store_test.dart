@@ -102,8 +102,10 @@ void main() {
         totalScreenTime: 3.5,
         switchVelocityPeak: 2.1,
         peakLoadHour: 14,
-        hourlyLoad: '[0,0,0,0,0,0,0,10,20,45,60,80,62,55,70,40,30,20,10,5,0,0,0,0]',
-        categoryBreakdown: '{"productive":40,"entertainment":20,"social":30,"passiveWaste":10}',
+        hourlyLoad:
+            '[0,0,0,0,0,0,0,10,20,45,60,80,62,55,70,40,30,20,10,5,0,0,0,0]',
+        categoryBreakdown:
+            '{"productive":40,"entertainment":20,"social":30,"passiveWaste":10}',
         synced: 0,
         updatedAt: DateTime.now().millisecondsSinceEpoch,
       );

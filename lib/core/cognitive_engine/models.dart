@@ -108,8 +108,8 @@ class CognitiveReport {
   final double wmCapacityRemaining;
   final double residueAtEOD; // 0–1
   final List<double> hourlyDebt; // 24-element, each 0–100
-  // BUG-08: nullable — null means no events, 0 means midnight was peak hour.
-  final int? peakLoadHour; // 0–23, or null if no events that day
+  // Peak hour defaults to 0 if there are no events to match desktop parity.
+  final int peakLoadHour; // 0–23
 
   const CognitiveReport({
     required this.cognitiveDebt,
@@ -150,6 +150,44 @@ class CategoryBreakdown {
       );
 }
 
+// ─── Break Event ──────────────────────────────────────────────────────────────
+// CRITICAL-1 FIX: Dart port of types.ts BreakEvent.
+// Populated by extractBreakEvents() and included in PhoneSyncPayload so the
+// Cloud Function can compute recovery_verified_break_minutes and recovery radar
+// for phone sessions (previously always 0 because the field was never written).
+class BreakEvent {
+  final String startTime; // ISO timestamp
+  final String endTime; // ISO timestamp
+  final String activityType; // 'IDLE' | 'STRUCTURED' | 'SLEEP'
+  final int durationMinutes;
+  final double debtBefore; // cognitiveLoadPct snapshot before break
+  final double debtAfter; // cognitiveLoadPct snapshot after break
+  final double ptsRecovered;
+  final int efficiencyPct; // ptsRecovered / debtBefore * 100
+
+  const BreakEvent({
+    required this.startTime,
+    required this.endTime,
+    required this.activityType,
+    required this.durationMinutes,
+    required this.debtBefore,
+    required this.debtAfter,
+    required this.ptsRecovered,
+    required this.efficiencyPct,
+  });
+
+  Map<String, dynamic> toMap() => {
+        'start_time': startTime,
+        'end_time': endTime,
+        'activity_type': activityType,
+        'duration_minutes': durationMinutes,
+        'debt_before': debtBefore,
+        'debt_after': debtAfter,
+        'pts_recovered': ptsRecovered,
+        'efficiency_pct': efficiencyPct,
+      };
+}
+
 /// The 11 scalar metrics written to Firestore as PhoneSyncPayload
 class PhoneSyncPayload {
   final String date; // YYYY-MM-DD
@@ -164,10 +202,13 @@ class PhoneSyncPayload {
   final int totalPickups;
   final double switchVelocityPeak;
   final CategoryBreakdown categoryBreakdown;
-  // BUG-08: nullable — null means no events recorded for this day.
-  final int? peakLoadHour; // 0–23, or null if no events that day
+  // Peak hour defaults to 0 if there are no events to match desktop parity.
+  final int peakLoadHour; // 0–23
   final List<double> hourlyLoad; // 24-element 0–100
   final String lastUpdated; // ISO timestamp
+  // CRITICAL-1 FIX: break_events was missing. Cloud Function now receives
+  // phone break data for recovery radar and verified break minutes.
+  final List<BreakEvent> breakEvents;
 
   const PhoneSyncPayload({
     required this.date,
@@ -185,6 +226,7 @@ class PhoneSyncPayload {
     required this.peakLoadHour,
     required this.hourlyLoad,
     required this.lastUpdated,
+    this.breakEvents = const [],
   });
 
   Map<String, dynamic> toFirestore() => {
@@ -204,5 +246,8 @@ class PhoneSyncPayload {
         'peakLoadHour': peakLoadHour,
         'hourlyLoad': hourlyLoad,
         'lastUpdated': lastUpdated,
+        // CRITICAL-1 FIX: serialise break events so Cloud Function can compute
+        // recovery_verified_break_minutes and recovery_radar.recovery for phone.
+        'break_events': breakEvents.map((b) => b.toMap()).toList(),
       };
 }

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Network Security Config — CogniTrack Mobile
+  - Blocks all cleartext (HTTP) traffic; only HTTPS is permitted.
+  - Only trusts system CA certificates; user-installed CAs are explicitly
+    excluded, preventing MITM via user-added certificates.
+  - Debug overrides intentionally omitted so the policy is enforced in
+    both debug and release builds.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <!-- Trust only system CAs — no user-installed certificates -->
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

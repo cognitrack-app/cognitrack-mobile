@@ -17,6 +17,23 @@ import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
 
 /**
+ * BUG-3 FIX NOTICE:
+ * The previous implementation registered a BroadcastReceiver for
+ * "com.cognitrack.USAGE_EVENTS_READY" inside onAttachedToEngine().
+ * That receiver only existed while MainActivity was running. Between
+ * device reboot and the first app open, ForegroundService was broadcasting
+ * to nobody and all events were permanently lost.
+ *
+ * The new architecture:
+ *   - ForegroundService queries UsageStatsManager natively and buffers
+ *     results in UsageEventBuffer (SharedPreferences-backed).
+ *   - onAttachedToEngine() calls UsageEventBuffer.drain() immediately to
+ *     forward any events captured before MainActivity opened.
+ *   - No BroadcastReceiver is registered here — ForegroundService no longer
+ *     sends the USAGE_EVENTS_READY broadcast.
+ */
+
+/**
  * UsageStatsPlugin — exposes UsageStatsManager to Flutter via MethodChannel.
  *
  * Channel: com.cognitrack/usage_stats
@@ -28,37 +45,24 @@ import io.flutter.plugin.common.MethodChannel.Result
 class UsageStatsPlugin : FlutterPlugin, MethodCallHandler {
     private lateinit var channel: MethodChannel
     private lateinit var context: Context
-    private var receiver: android.content.BroadcastReceiver? = null
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         context = binding.applicationContext
         channel = MethodChannel(binding.binaryMessenger, "com.cognitrack/usage_stats")
         channel.setMethodCallHandler(this)
 
-        receiver = object : android.content.BroadcastReceiver() {
-            override fun onReceive(ctx: Context, intent: Intent) {
-                if (intent.action == "com.cognitrack.USAGE_EVENTS_READY") {
-                    val startMs = intent.getLongExtra("startMs", 0L)
-                    val endMs = intent.getLongExtra("endMs", System.currentTimeMillis())
-                    val events = queryUsageEvents(startMs, endMs)
-                    if (events.isNotEmpty()) {
-                        channel.invokeMethod("onUsageEvents", events)
-                    }
-                }
-            }
-        }
-        val filter = android.content.IntentFilter("com.cognitrack.USAGE_EVENTS_READY")
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            context.registerReceiver(receiver, filter)
+        // BUG-3 FIX: Drain events buffered by ForegroundService while the app
+        // was closed (e.g. after reboot, before first app open). This is safe
+        // to call on the main thread — drain() is synchronous and fast because
+        // it only reads/clears a single SharedPreferences key.
+        val buffered = UsageEventBuffer.drain(context)
+        if (buffered.isNotEmpty()) {
+            channel.invokeMethod("onUsageEvents", buffered)
         }
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel.setMethodCallHandler(null)
-        receiver?.let { context.unregisterReceiver(it) }
-        receiver = null
     }
 
     override fun onMethodCall(call: MethodCall, result: Result) {
@@ -113,22 +117,24 @@ class UsageStatsPlugin : FlutterPlugin, MethodCallHandler {
     // Launcher packages to exclude — pressing Home fires MOVE_TO_FOREGROUND
     // for the active launcher, which would count as a context switch to 'tools'
     // and inflate switch counts on every device. This set covers all major OEMs.
-    private val launcherPackages = setOf(
-        "com.android.launcher",              // AOSP generic
-        "com.android.launcher3",             // AOSP Launcher3
-        "com.google.android.apps.nexuslauncher", // Pixel 6+
-        "com.sec.android.app.launcher",      // Samsung One UI
-        "com.samsung.android.app.spage",     // Samsung Bixby Home
-        "com.miui.home",                     // Xiaomi MIUI
-        "com.oneplus.launcher",              // OnePlus OxygenOS
-        "com.oppo.launcher",                 // Oppo ColorOS
-        "net.one.punch.launcher",            // Realme
-        "com.huawei.android.launcher",       // Huawei EMUI
-        "com.hihonor.android.launcher",      // Honor
-        "com.asus.launcher",                 // ASUS ZenUI
-        "com.lge.launcher3",                 // LG UX
-        context.packageName                  // CogniTrack itself
-    )
+    private val launcherPackages by lazy {
+        setOf(
+            "com.android.launcher",              // AOSP generic
+            "com.android.launcher3",             // AOSP Launcher3
+            "com.google.android.apps.nexuslauncher", // Pixel 6+
+            "com.sec.android.app.launcher",      // Samsung One UI
+            "com.samsung.android.app.spage",     // Samsung Bixby Home
+            "com.miui.home",                     // Xiaomi MIUI
+            "com.oneplus.launcher",              // OnePlus OxygenOS
+            "com.oppo.launcher",                 // Oppo ColorOS
+            "net.one.punch.launcher",            // Realme
+            "com.huawei.android.launcher",       // Huawei EMUI
+            "com.hihonor.android.launcher",      // Honor
+            "com.asus.launcher",                 // ASUS ZenUI
+            "com.lge.launcher3",                 // LG UX
+            context.packageName                  // CogniTrack itself
+        )
+    }
 
     private fun queryUsageEvents(startMs: Long, endMs: Long): List<Map<String, Any>> {
         val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager

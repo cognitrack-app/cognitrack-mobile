@@ -1,17 +1,20 @@
 /// App entry point — initialises Firebase and wires up providers.
 library;
 
+import 'dart:async';
+import 'package:firebase_crashlytics/firebase_crashlytics.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:provider/provider.dart';
 import 'core/database/sqlite_store.dart';
+import 'core/mock/mock_data_seeder.dart';
 import 'core/sync/firestore_client.dart';
 import 'core/sync/sync_engine.dart';
 import 'platform/android/usage_stats_collector.dart';
 import 'dart:io' as io;
 import 'platform/ios/manual_session_logger.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'app.dart';
 import 'firebase_options.dart';
@@ -19,20 +22,27 @@ import 'firebase_options.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // BUG-15: initialise Firebase (and error tracking) BEFORE loading optional
-  // assets. If font loading throws, Crashlytics is already running to capture
-  // the failure — previously it was never initialised in that path.
+  // Initialise Firebase FIRST so Crashlytics is active before any other work.
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
 
-  // Font preloading is best-effort: a network failure here is non-fatal.
-  await Future.wait([
-    GoogleFonts.pendingFonts([
-      GoogleFonts.inter(),
-      GoogleFonts.jetBrainsMono(),
-    ]),
-  ]).catchError((_) => <List<void>>[/* fonts are optional — fallback fonts will be used */]);
+  // Wire up Crashlytics to capture all uncaught Flutter and platform errors.
+  // FlutterError.onError catches errors thrown inside Flutter framework callbacks
+  // (build, layout, painting). PlatformDispatcher.onError catches errors thrown
+  // outside the Flutter framework (isolates, platform channels, async gaps).
+  if (!kDebugMode) {
+    FlutterError.onError = FirebaseCrashlytics.instance.recordFlutterFatalError;
+    PlatformDispatcher.instance.onError = (error, stack) {
+      FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
+      return true;
+    };
+  }
+
+  // Google Fonts: remove CDN pre-fetch — fonts are resolved from cache or
+  // system fallback at paint time. The pendingFonts() network call added
+  // latency on every cold start and silently failed on first offline launch.
+  // Fonts are loaded on-demand by the google_fonts package with disk caching.
 
   // Bootstrap core services
   final store = SQLiteStore();
@@ -53,6 +63,18 @@ Future<void> main() async {
 
   // Start 15-minute sync timer after the auth listener is wired up.
   syncEngine.start();
+
+  // AUTO-SEED: In debug builds, automatically seed 14 days of mock data on
+  // every cold start so the UI is never empty during development or demos.
+  // Uses ConflictAlgorithm.replace — safe to call on every launch.
+  if (kDebugMode) {
+    try {
+      await MockDataSeeder(store: store).seed();
+      debugPrint('[main] ✅ Auto-seeded 14 days of mock data.');
+    } catch (e) {
+      debugPrint('[main] Mock data seed failed (non-fatal): $e');
+    }
+  }
 
   if (io.Platform.isAndroid) {
     final collector = UsageStatsCollector();
@@ -95,9 +117,10 @@ Future<void> main() async {
           ));
         }
         // Trigger an immediate sync so today's data reaches Firestore now.
-        syncEngine.syncNow().catchError(
-          (Object e) => debugPrint('[main] initial backfill sync error: $e'),
-        );
+        unawaited(syncEngine.syncNow().catchError(
+              (Object e) =>
+                  debugPrint('[main] initial backfill sync error: $e'),
+            ));
       } catch (e) {
         debugPrint('[main] FUNC-03 backfill error (non-fatal): $e');
       }

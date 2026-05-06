@@ -36,7 +36,7 @@ class DeltaBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Text(
-      text,
+      text.toUpperCase(),
       style: AppTextStyles.deltaLabel.copyWith(color: _color),
     );
   }
