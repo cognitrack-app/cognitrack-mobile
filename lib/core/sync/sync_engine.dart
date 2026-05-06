@@ -9,6 +9,7 @@
 ///   - Failed syncs are written to pending_sync SQLite table
 ///   - Exponential backoff: 30s → 60s → 120s → 240s (max 4 retries)
 ///   - Queue flushes automatically when connectivity is restored
+// ignore_for_file: unawaited_futures
 library;
 
 import 'dart:async';
@@ -22,6 +23,7 @@ import 'package:uuid/uuid.dart';
 
 import '../cognitive_engine/cognitive_engine.dart';
 import '../cognitive_engine/models.dart';
+import '../cognitive_engine/break_extractor.dart'; // CRITICAL-1 FIX
 import '../database/sqlite_store.dart';
 import '../device_id.dart';
 import 'firestore_client.dart';
@@ -50,6 +52,11 @@ class SyncEngine with WidgetsBindingObserver {
   // writes + races on _store.deletePendingSync(row.id!).
   bool _isSyncing = false;
 
+  // demo mode — set to true by main_demo.dart via the isDemo constructor param.
+  // When true, syncNow() and _flushPendingQueue() are no-ops so no real data
+  // is ever written to Firestore during a demo run.
+  final bool _isDemo;
+
   static const _syncIntervalMinutes = 15;
 
   SyncEngine({
@@ -57,10 +64,12 @@ class SyncEngine with WidgetsBindingObserver {
     required FirestoreClient client,
     Connectivity? connectivity,
     ScreenOnReceiver? screenOnReceiver,
+    bool isDemo = false,
   })  : _store = store,
         _client = client,
         _connectivity = connectivity ?? Connectivity(),
-        _screenOnReceiver = screenOnReceiver ?? ScreenOnReceiver();
+        _screenOnReceiver = screenOnReceiver ?? ScreenOnReceiver(),
+        _isDemo = isDemo;
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
@@ -75,7 +84,7 @@ class SyncEngine with WidgetsBindingObserver {
     // Sync when connectivity is restored
     _connectivitySub = _connectivity.onConnectivityChanged.listen((results) {
       final hasConnection = results.any((r) => r != ConnectivityResult.none);
-      if (hasConnection) _flushPendingQueue();
+      if (hasConnection) unawaited(_flushPendingQueue());
     });
   }
 
@@ -91,10 +100,10 @@ class SyncEngine with WidgetsBindingObserver {
       // didChangeAppLifecycleState cannot be async, so we attach an error
       // handler inline. An unhandled exception inside syncNow() would otherwise
       // become an uncaught zone error crashing the dart:async error handler.
-      syncNow().catchError(
+      unawaited(syncNow().catchError(
         (Object e, StackTrace st) =>
             debugPrint('[SyncEngine] paused sync error: $e\n$st'),
-      );
+      ));
     }
   }
 
@@ -104,7 +113,13 @@ class SyncEngine with WidgetsBindingObserver {
 
   /// Compute today's metrics from local SQLite events and push to Firestore.
   /// Called by timer, lifecycle paused, and manual refresh.
+  /// No-op in demo mode — metrics are pre-seeded, no Firestore writes needed.
   Future<void> syncNow() async {
+    // Demo guard: skip all Firestore writes in demo flavor.
+    if (_isDemo) {
+      debugPrint('[SyncEngine] demo mode — syncNow() skipped.');
+      return;
+    }
     // B1 FIX: early-exit if a sync is already in progress.
     if (!_client.isAuthenticated || _isSyncing) return;
     _isSyncing = true;
@@ -116,6 +131,16 @@ class SyncEngine with WidgetsBindingObserver {
     PhoneSyncPayload? payload;
     try {
       payload = await _buildPayload(today);
+
+      // H1 FIX: guard against writing an all-zero row on fresh install.
+      // On first launch mid-day, getEventsForDate() returns [] because the
+      // foreground service hasn't collected anything yet. Upserting a zero
+      // row would overwrite any existing Firestore data for today with zeros.
+      // Skip the upsert entirely and let the next 15-min tick do it properly.
+      if (payload.totalSwitches == 0 && payload.totalScreenTime < 0.001) {
+        debugPrint('[SyncEngine] no events yet — skipping zero upsert.');
+        return;
+      }
 
       // ✅ ALWAYS persist locally first, regardless of Firestore outcome
       await _store.upsertDailyMetrics(_payloadToMetricsRow(payload));
@@ -157,8 +182,19 @@ class SyncEngine with WidgetsBindingObserver {
 
   // ── Payload builder ───────────────────────────────────────────────────────
 
+  // Maximum number of raw events passed into the compute() isolate.
+  // A 60-second poll cycle can emit 20–100 UsageStats events; on a heavy-usage
+  // day this grows into the thousands. The isolate message-passing cost scales
+  // linearly with list size — cap it to keep the sync cycle under ~100 ms.
+  // We always keep the *most recent* events so the debt calculation reflects
+  // current behaviour, not stale morning data.
+  static const _maxComputeEvents = 5000;
+
   Future<PhoneSyncPayload> _buildPayload(String date) async {
-    final events = await _store.getEventsForDate(date);
+    final allEvents = await _store.getEventsForDate(date);
+    final events = allEvents.length > _maxComputeEvents
+        ? allEvents.sublist(allEvents.length - _maxComputeEvents)
+        : allEvents;
     final report = await compute(calculateCognitiveDebt, events);
 
     // Compute phone-specific extras
@@ -191,6 +227,10 @@ class SyncEngine with WidgetsBindingObserver {
     // Category breakdown (% of screen time per category)
     final breakdown = _computeCategoryBreakdown(events, totalMs);
 
+    // CRITICAL-1 FIX: extract break events from idle markers so the Cloud
+    // Function can compute recovery_verified_break_minutes and recovery radar.
+    final breakEvents = extractBreakEvents(events, report.hourlyDebt);
+
     final deviceId = await _getDeviceId();
 
     return PhoneSyncPayload(
@@ -209,6 +249,7 @@ class SyncEngine with WidgetsBindingObserver {
       peakLoadHour: report.peakLoadHour,
       hourlyLoad: report.hourlyDebt,
       lastUpdated: DateTime.now().toUtc().toIso8601String(),
+      breakEvents: breakEvents, // CRITICAL-1 FIX
     );
   }
 
@@ -290,6 +331,8 @@ class SyncEngine with WidgetsBindingObserver {
   }
 
   Future<void> _flushPendingQueue() async {
+    // Demo guard: never flush the offline queue in demo mode.
+    if (_isDemo) return;
     if (!_client.isAuthenticated) return;
 
     final pending = await _store.getReadyPendingSyncs();
@@ -321,8 +364,8 @@ class SyncEngine with WidgetsBindingObserver {
               (firestoreMap['switchVelocityPeak'] as num).toDouble(),
           categoryBreakdown: CategoryBreakdown.fromMap(
               firestoreMap['categoryBreakdown'] as Map<String, dynamic>),
-          // BUG-08: peakLoadHour is int? — JSON value may be null on no-event days.
-          peakLoadHour: (firestoreMap['peakLoadHour'] as num?)?.toInt(),
+          // Peak load hour defaults to 0
+          peakLoadHour: (firestoreMap['peakLoadHour'] as num?)?.toInt() ?? 0,
           hourlyLoad: (firestoreMap['hourlyLoad'] as List)
               .map((e) => (e as num).toDouble())
               .toList(),

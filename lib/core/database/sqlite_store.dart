@@ -46,9 +46,8 @@ class DailyMetricsRow {
   final int totalPickups;
   final double totalScreenTime; // hours
   final double switchVelocityPeak;
-  // BUG-08: nullable — -1 is the SQLite sentinel meaning "no events today".
-  // fromMap converts -1 → null; toMap converts null → -1.
-  final int? peakLoadHour;
+  // Peak hour defaults to 0 to match desktop parity.
+  final int peakLoadHour;
   final String hourlyLoad; // JSON array [24 numbers]
   final String categoryBreakdown; // JSON object
   final int synced; // 0 = pending, 1 = synced
@@ -81,10 +80,7 @@ class DailyMetricsRow {
         totalPickups: m['totalPickups'] as int? ?? 0,
         totalScreenTime: (m['totalScreenTime'] as num?)?.toDouble() ?? 0,
         switchVelocityPeak: (m['switchVelocityPeak'] as num).toDouble(),
-        // BUG-08: -1 is the sentinel stored for "no events" days.
-        peakLoadHour: (m['peakLoadHour'] as int) == -1
-            ? null
-            : (m['peakLoadHour'] as int),
+        peakLoadHour: m['peakLoadHour'] as int,
         hourlyLoad: m['hourlyLoad'] as String,
         categoryBreakdown: m['categoryBreakdown'] as String,
         synced: m['synced'] as int,
@@ -101,8 +97,7 @@ class DailyMetricsRow {
         'totalPickups': totalPickups,
         'totalScreenTime': totalScreenTime,
         'switchVelocityPeak': switchVelocityPeak,
-        // BUG-08: store -1 for null (no-events day); never a valid clock hour
-        'peakLoadHour': peakLoadHour ?? -1,
+        'peakLoadHour': peakLoadHour,
         'hourlyLoad': hourlyLoad,
         'categoryBreakdown': categoryBreakdown,
         'synced': synced,
@@ -164,12 +159,22 @@ class SQLiteStore {
   static const _sevenDaysMs = 604800000; // 7 * 24 * 60 * 60 * 1000
 
   Database? _db;
+  Future<Database>? _opening;
 
   SQLiteStore({String dbName = 'cognitrack.db'}) : _dbName = dbName;
 
+  /// Async-safe singleton: if two callers race, both await the same Future
+  /// instead of calling _open() twice. The second open attempt was triggering
+  /// PRAGMA journal_mode=WAL on an already-locked DB, causing the SQLite
+  /// "Queries can be performed using query or rawQuery methods only" crash.
   Future<Database> get _database async {
-    _db ??= await _open();
-    return _db!;
+    if (_db != null) return _db!;
+    _opening ??= _open().then((db) {
+      _db = db;
+      _opening = null;
+      return db;
+    });
+    return _opening!;
   }
 
   Future<Database> _open() async {
@@ -178,15 +183,18 @@ class SQLiteStore {
       dbPath,
       version: _dbVersion,
       onCreate: _onCreate,
-      onOpen: (db) async {
-        // WAL mode for write safety
+      // onConfigure fires BEFORE onCreate/onUpgrade and outside any transaction,
+      // which is the ONLY safe place to run PRAGMA statements in sqflite.
+      // Running PRAGMA journal_mode=WAL inside onOpen or onCreate throws:
+      // "Queries can be performed using SQLiteDatabase query or rawQuery methods only"
+      // because those callbacks run inside a write transaction on newer sqflite.
+      onConfigure: (db) async {
         await db.execute('PRAGMA journal_mode=WAL');
         await db.execute('PRAGMA foreign_keys=ON');
         await db.execute('PRAGMA synchronous=NORMAL');
-        // Enforce 7-day TTL once at startup rather than on every insert.
-        // insertEvent() is called up to 100× per minute on Android (60-second
-        // poll cycle returning 20–100 UsageStats events). Running a full-table
-        // DELETE scan on every insert wastes CPU and IO unnecessarily.
+      },
+      onOpen: (db) async {
+        // TTL cleanup: delete events older than 7 days. Safe here (no PRAGMAs).
         await db.delete(
           'app_events',
           where: 'timestamp < ?',
@@ -320,14 +328,20 @@ class SQLiteStore {
   // ── Daily Metrics ──────────────────────────────────────────────────────────
 
   /// Upsert computed daily metrics for a given date.
+  /// Preserves the caller-supplied [synced] value — the mock seeder sets
+  /// synced=1 so the 15-min SyncEngine timer does NOT overwrite historical
+  /// rows with empty recomputed values on the next tick.
   Future<void> upsertDailyMetrics(DailyMetricsRow metrics) async {
     final db = await _database;
     await db.insert(
       'daily_metrics',
       {
         ...metrics.toMap(),
-        'synced': 0,
-        'updatedAt': DateTime.now().millisecondsSinceEpoch
+        // Preserve caller-supplied synced flag instead of forcing 0.
+        // MockDataSeeder passes synced:1 — forcing 0 here was making the
+        // SyncEngine immediately overwrite seeded historical rows on the
+        // next 15-min tick, wiping all demo data silently.
+        'updatedAt': DateTime.now().millisecondsSinceEpoch,
       },
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
@@ -459,7 +473,8 @@ class SQLiteStore {
 
     final rows = await db.query(
       'app_events',
-      where: "timestamp >= ? AND timestamp < ? AND eventType = 'break'",
+      where:
+          "timestamp >= ? AND timestamp < ? AND eventType = 'break'", // ignore: prefer_single_quotes
       whereArgs: [start.millisecondsSinceEpoch, end.millisecondsSinceEpoch],
       orderBy: 'timestamp ASC',
     );
@@ -485,7 +500,7 @@ class SQLiteStore {
     final db = await _database;
     final rows = await db.query(
       'daily_metrics',
-      where: "date >= ? AND date <= ?",
+      where: 'date >= ? AND date <= ?',
       whereArgs: [from, to],
       orderBy: 'date ASC',
     );

@@ -19,6 +19,7 @@ class MetricEntry extends StatefulWidget {
     required this.child,
     this.delay = Duration.zero,
     this.duration = const Duration(milliseconds: 520),
+
     /// Slide offset as a fraction of the widget’s own height (Offset.dy).
     this.offsetY = 0.10,
   });

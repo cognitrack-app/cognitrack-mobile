@@ -34,7 +34,15 @@ class FirestoreClient {
         .doc(uid)
         .collection('sessions')
         .doc(payload.date)
-        .set({'phoneMetrics': payload.toFirestore()}, SetOptions(merge: true));
+        .set({
+      // MEDIUM-3 FIX: always write the root 'date' field so the session
+      // document is self-describing. Without this, when the phone is the
+      // first agent to write for a day, the document has no root 'date'
+      // field, causing computeDerivedDayMetrics() to emit date=undefined
+      // into the DerivedDayMetrics document.
+      'date': payload.date,
+      'phoneMetrics': payload.toFirestore(),
+    }, SetOptions(merge: true));
   }
 
   // ── Device registration ────────────────────────────────────────────────────

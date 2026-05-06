@@ -1,16 +1,19 @@
-/// NtMorphCard — 3-D morphism card for the home dashboard.
+/// NtMorphCard — base card for Recovery, Sanctuary, and secondary sections.
 ///
-/// Simulates a physical card floating above the dark surface by combining:
-///   • Asymmetric directional borders (bright top-left edge, dark bottom-right)
-///   • Linear gradient body (lighter top-left → darker bottom-right)
-///   • Multi-layer box shadows (deep ambient + contact + optional red glow)
-///   • Top specular highlight (1 px inset white shadow at 3 % opacity)
+/// Matches the Stitch "Clinical Observer" design system exactly:
+///   • Fill: surface_container (#201F1F) — Level 2 of the obsidian stack.
+///   • No directional light-source borders (violated the No-Line Rule).
+///   • "Ghost Border" fallback: outline_variant at 15% opacity only if
+///     [ghostBorder] is true (accessibility / redBorder states only).
+///   • Ambient Crimson shadow: 40px blur, 6% opacity — per design spec.
+///   • Corner radius: 8px — Stitch ROUND_EIGHT.
+///   • [redBorder] applies crimson ghost border + crimson ambient glow.
+///   • [elevated] deepens the shadow for hero cards.
 ///
-/// Android optimisation notes:
-///   • BoxDecoration is static — renders once and is hardware-cached.
-///   • Never animate the decoration itself; animate only the child via
-///     Transform / FadeTransition (compositor layers, zero CPU cost).
-///   • Wrap the card's parent in RepaintBoundary for entrance animations.
+/// Android optimisation:
+///   • BoxDecoration is static — renders once, hardware-cached.
+///   • Animate only children via Transform / FadeTransition.
+///   • Wrap parent in RepaintBoundary for entrance animations.
 library;
 
 import 'package:flutter/material.dart';
@@ -28,10 +31,10 @@ class NtMorphCard extends StatelessWidget {
 
   final Widget child;
 
-  /// Draws a red bottom/right border + red ambient glow.
+  /// Draws a crimson ghost border + crimson ambient glow.
   final bool redBorder;
 
-  /// Increases shadow depth — use for the hero "COG. DEBT PTS" wide card.
+  /// Increases shadow depth — use for hero "COG. DEBT PTS" card.
   final bool elevated;
 
   final EdgeInsetsGeometry? padding;
@@ -42,68 +45,43 @@ class NtMorphCard extends StatelessWidget {
       width: double.infinity,
       padding: padding ?? const EdgeInsets.all(AppSpacing.md),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
-        // ── Gradient body ─────────────────────────────────────────────────
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            Color(0xFF202024), // lighter — simulates top-left light source
-            Color(0xFF131315), // darker  — shadowed bottom-right
-          ],
-        ),
-        // ── Directional borders ───────────────────────────────────────────
-        border: Border(
-          top: BorderSide(
-            color: Colors.white.withValues(alpha: 0.08),
-            width: 0.75,
-          ),
-          left: BorderSide(
-            color: Colors.white.withValues(alpha: 0.05),
-            width: 0.75,
-          ),
-          bottom: BorderSide(
-            color: redBorder
-                ? AppColors.borderRed
-                : Colors.black.withValues(alpha: 0.70),
-            width: redBorder ? 1.0 : 0.75,
-          ),
-          right: BorderSide(
-            color: redBorder
-                ? AppColors.borderRed.withValues(alpha: 0.55)
-                : Colors.black.withValues(alpha: 0.50),
-            width: 0.75,
-          ),
-        ),
-        // ── Shadow stack ──────────────────────────────────────────────────
+        // ── Surface fill: Level 2 obsidian (surface_container) ─────────────
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(AppSpacing.cardR), // 8px
+        // ── Ghost Border Rule: only when redBorder or explicit border needed ─
+        border: redBorder
+            ? Border.all(
+                color: AppColors.primaryContainer.withValues(alpha: 0.40),
+                width: 0.8,
+              )
+            : Border.all(
+                color: AppColors.outlineVariant.withValues(alpha: 0.15),
+                width: 0.8,
+              ),
+        // ── Shadow stack ─────────────────────────────────────────────────────
         boxShadow: [
-          // Deep ambient shadow — creates the "floating" illusion
+          // Ambient shadow: 40px blur, tinted Crimson (#680009), 6% opacity
           BoxShadow(
-            color: Colors.black.withValues(alpha: elevated ? 0.65 : 0.48),
-            blurRadius: elevated ? 36 : 22,
-            spreadRadius: elevated ? 2 : 0,
-            offset: Offset(0, elevated ? 18 : 11),
+            color: AppColors.shadowCrimson.withValues(
+              alpha: elevated ? 0.10 : 0.06,
+            ),
+            blurRadius: 40,
+            offset: const Offset(0, 8),
           ),
-          // Close contact shadow — sharpens the card edge
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.28),
-            blurRadius: 5,
-            offset: const Offset(0, 3),
-          ),
+          // Contact shadow for physical depth
+          if (elevated)
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.35),
+              blurRadius: 20,
+              offset: const Offset(0, 10),
+            ),
           // Red ambient glow for critical / redBorder cards
           if (redBorder)
             BoxShadow(
-              color: AppColors.red.withValues(alpha: 0.13),
+              color: AppColors.primaryContainer.withValues(alpha: 0.13),
               blurRadius: 30,
-              spreadRadius: 0,
               offset: const Offset(0, 8),
             ),
-          // Top specular highlight — 1 px reflection of the "light source"
-          BoxShadow(
-            color: Colors.white.withValues(alpha: 0.03),
-            blurRadius: 0,
-            offset: const Offset(0, 1),
-          ),
         ],
       ),
       child: child,

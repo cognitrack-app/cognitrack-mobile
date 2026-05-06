@@ -23,16 +23,19 @@ class AnalyticsScreen extends StatefulWidget {
 }
 
 class _AnalyticsScreenState extends State<AnalyticsScreen> {
-  // FUNC-08 FIX: initState() only fires once (widget first insert). On tab
-  // re-visit (Dashboard → Analytics → Dashboard → Analytics) the second visit
-  // showed stale data because initState didn't re-run. didChangeDependencies()
-  // fires both on initial insert AND whenever the widget's route becomes active
-  // again, ensuring fresh data on every tab switch.
+  bool _loaded = false;
+
+  // Load exactly once on first insert. didChangeDependencies re-fires on
+  // every ancestor rebuild which called load() → loading=true → shimmer
+  // flash on every unrelated rebuild. Use initState + a guard flag instead.
   @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
+  void initState() {
+    super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) context.read<AnalyticsProvider>().load();
+      if (mounted && !_loaded) {
+        _loaded = true;
+        context.read<AnalyticsProvider>().load();
+      }
     });
   }
 
@@ -65,15 +68,9 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
           children: [
             Row(
               children: [
-                IconButton(
-                  icon: const Icon(Icons.arrow_back_outlined,
-                      color: AppColors.textPrimary),
-                  onPressed: () {},
-                ),
-                Expanded(
-                    child: Center(
-                        child:
-                            Text('ANALYTICS', style: AppTextStyles.chipLabel))),
+                // Fix #12: Removed duplicate centred 'ANALYTICS' chip label.
+                // Stitch header has a single bold title, not two stacked labels.
+                const Spacer(),
                 IconButton(
                   icon: Stack(
                     alignment: Alignment.center,
@@ -106,11 +103,14 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                 ),
               ],
             ),
-            Text('ANALYTICS',
-                style: AppTextStyles.display
-                    .copyWith(fontWeight: FontWeight.w800, fontSize: 30)),
+            Text('S3 ANALYTICS',
+                style: AppTextStyles.cardTitle.copyWith(
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 3,
+                  fontSize: 18,
+                )),
             const SizedBox(height: 4),
-            Text('SENSOR-ID: AS-40 · GATEWAY: 12MS',
+            Text('SENSOR-ID: NX-90  ·  LATENCY: 12MS',
                 style: AppTextStyles.chipLabel
                     .copyWith(color: AppColors.textMuted)),
           ],
@@ -196,31 +196,9 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                     if (p.todayHourlyBars.isNotEmpty) ...[
                       const SizedBox(width: 12),
                       SizedBox(
-                        width: 60,
-                        height: 24,
-                        child: LineChart(
-                          LineChartData(
-                            gridData: const FlGridData(show: false),
-                            titlesData: const FlTitlesData(show: false),
-                            borderData: FlBorderData(show: false),
-                            minY: 0,
-                            maxY: 100,
-                            lineBarsData: [
-                              LineChartBarData(
-                                spots: p.todayHourlyBars
-                                    .asMap()
-                                    .entries
-                                    .map((e) =>
-                                        FlSpot(e.key.toDouble(), e.value))
-                                    .toList(),
-                                isCurved: true,
-                                color: AppColors.red,
-                                barWidth: 1.5,
-                                dotData: const FlDotData(show: false),
-                              ),
-                            ],
-                          ),
-                        ),
+                        width: 64,
+                        height: 32,
+                        child: CustomPaint(painter: _WaveformPainter()),
                       ),
                     ],
                   ],
@@ -337,14 +315,18 @@ class _VelocityChart extends StatelessWidget {
                 reservedSize: 22,
                 getTitlesWidget: (val, _) {
                   final h = val.toInt();
-                  // GAP-09 FIX: Only 08:00 and 20:00 labels existed — no
-                  // current-hour marker. Users couldn't tell where 'now' was
-                  // on the timeline. Added a 'NOW' label at the current hour.
                   final currentHour = DateTime.now().hour;
-                  if (h == 8) return _axisLabel('08:00');
-                  if (h == 20) return _axisLabel('20:00');
-                  if (h == currentHour) {
-                    return _axisLabel('CURRENT\nOBSERVATION');
+                  if (h == 8) {
+                    return SideTitleWidget(
+                        axisSide: AxisSide.bottom, child: _axisLabel('08:00'));
+                  }
+                  if (h == 20) {
+                    return SideTitleWidget(
+                        axisSide: AxisSide.bottom, child: _axisLabel('20:00'));
+                  }
+                  if (h == currentHour && h != 8 && h != 20) {
+                    return SideTitleWidget(
+                        axisSide: AxisSide.bottom, child: _axisLabel('NOW'));
                   }
                   return const SizedBox.shrink();
                 },
@@ -366,9 +348,13 @@ class _VelocityChart extends StatelessWidget {
               dashArray: [4, 4],
               label: HorizontalLineLabel(
                 show: true,
-                alignment: Alignment.topRight,
-                labelResolver: (_) => 'Threshold 80/HR',
-                style: AppTextStyles.chipLabel.copyWith(color: AppColors.red),
+                alignment: Alignment.topLeft,
+                padding: const EdgeInsets.only(left: 4, bottom: 2),
+                labelResolver: (_) => 'THR 80',
+                style: AppTextStyles.chipLabel.copyWith(
+                  color: AppColors.red,
+                  fontSize: 8,
+                ),
               ),
             ),
             HorizontalLine(
@@ -378,9 +364,10 @@ class _VelocityChart extends StatelessWidget {
               dashArray: [4, 4],
               label: HorizontalLineLabel(
                 show: true,
-                alignment: Alignment.topRight,
-                labelResolver: (_) => 'Baseline 40/HR',
-                style: AppTextStyles.chipLabel,
+                alignment: Alignment.topLeft,
+                padding: const EdgeInsets.only(left: 4, bottom: 2),
+                labelResolver: (_) => 'BASE 40',
+                style: AppTextStyles.chipLabel.copyWith(fontSize: 8),
               ),
             ),
           ]),
@@ -390,9 +377,10 @@ class _VelocityChart extends StatelessWidget {
     );
   }
 
-  Widget _axisLabel(String text) => Padding(
-        padding: const EdgeInsets.only(top: 4),
-        child: Text(text, style: AppTextStyles.chipLabel.copyWith(fontSize: 9)),
+  Widget _axisLabel(String text) => Text(
+        text,
+        style: AppTextStyles.chipLabel.copyWith(fontSize: 9),
+        textAlign: TextAlign.center,
       );
 }
 
@@ -412,9 +400,17 @@ class _TemporalHeatmap extends StatelessWidget {
   final double peakValue;
 
   Color _cellColor(double v) {
-    if (v < 30) return AppColors.chartIdle;
-    if (v < 70) return AppColors.chartStrain;
-    return AppColors.chartRed;
+    final value = v / 100.0;
+    if (value < 0.05) return Colors.white.withValues(alpha: 0.05);
+    if (value < 0.1) return Colors.white.withValues(alpha: 0.10);
+    if (value < 0.2) return Colors.white.withValues(alpha: 0.20);
+    if (value < 0.3) return Colors.white.withValues(alpha: 0.40);
+    if (value < 0.4) return const Color(0xFF301010);
+    if (value < 0.55) return const Color(0xFF501010);
+    if (value < 0.7) return const Color(0xFF801010);
+    if (value < 0.85) return const Color(0xFFA01010);
+    if (value < 0.95) return const Color(0xFFCC1020);
+    return const Color(0xFFFF1A2B);
   }
 
   @override
@@ -425,14 +421,21 @@ class _TemporalHeatmap extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Hour header
+        // Hour header — left: 32 matches the SizedBox(width:32) day-label
+        // prefix on each row so columns stay perfectly aligned.
         Padding(
-          padding: const EdgeInsets.only(left: 36),
+          padding: const EdgeInsets.only(left: 32),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: hourLabels
-                .map((h) => Text(h,
-                    style: AppTextStyles.chipLabel.copyWith(fontSize: 9)))
+                .map((h) => SizedBox(
+                      width: 14,
+                      child: Text(
+                        h,
+                        style: AppTextStyles.chipLabel.copyWith(fontSize: 9),
+                        textAlign: TextAlign.center,
+                      ),
+                    ))
                 .toList(),
           ),
         ),
@@ -552,12 +555,15 @@ class _RecoveryChart extends StatelessWidget {
                       if (i < 0 || i >= keys.length) {
                         return const SizedBox.shrink();
                       }
-                      return Padding(
-                        padding: const EdgeInsets.only(top: 4),
+                      final abbr = keys[i].length > 3
+                          ? keys[i].substring(0, 3).toUpperCase()
+                          : keys[i].toUpperCase();
+                      return SideTitleWidget(
+                        axisSide: AxisSide.bottom,
                         child: Text(
-                            keys[i].substring(0, min(4, keys[i].length)),
-                            style:
-                                AppTextStyles.chipLabel.copyWith(fontSize: 9)),
+                          abbr,
+                          style: AppTextStyles.chipLabel.copyWith(fontSize: 9),
+                        ),
                       );
                     },
                   ),
@@ -597,4 +603,30 @@ class _RecoveryChart extends StatelessWidget {
       ],
     );
   }
+}
+
+class _WaveformPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = AppColors.red.withValues(alpha: 0.6)
+      ..strokeWidth = 1.5
+      ..style = PaintingStyle.stroke;
+    final path = Path();
+    path.moveTo(0, size.height * 0.5);
+    path.quadraticBezierTo(size.width * 0.1, size.height * 0.1,
+        size.width * 0.2, size.height * 0.5);
+    path.quadraticBezierTo(size.width * 0.3, size.height * 0.9,
+        size.width * 0.4, size.height * 0.5);
+    path.quadraticBezierTo(size.width * 0.5, size.height * 0.1,
+        size.width * 0.6, size.height * 0.5);
+    path.quadraticBezierTo(size.width * 0.7, size.height * 0.9,
+        size.width * 0.8, size.height * 0.5);
+    path.quadraticBezierTo(size.width * 0.9, size.height * 0.1,
+        size.width * 1.0, size.height * 0.5);
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(_) => false;
 }

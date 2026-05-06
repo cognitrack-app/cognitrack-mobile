@@ -21,8 +21,30 @@ linter:
   # `// ignore_for_file: name_of_lint` syntax on the line or in the file
   # producing the lint.
   rules:
-    # avoid_print: false  # Uncomment to disable the `avoid_print` rule
-    # prefer_single_quotes: true  # Uncomment to enable the `prefer_single_quotes` rule
+    # ── Performance ──────────────────────────────────────────────────────────────────
+    # Prefer const constructors so Flutter can skip rebuilding subtrees
+    # that haven’t changed.
+    prefer_const_constructors: true
+    prefer_const_constructors_in_immutables: true
+    # Avoid recreating List/Map literals on every rebuild.
+    prefer_const_literals_to_create_immutables: true
+    # Prefer sized boxes over empty containers for whitespace.
+    sized_box_for_whitespace: true
+    # Always pass a key to widgets that hold state — helps Flutter diff the tree.
+    use_key_in_widget_constructors: true
+
+    # ── Safety ─────────────────────────────────────────────────────────────────────
+    # Catch untyped dynamic map access at analysis time (Firestore payloads).
+    avoid_dynamic_calls: true
+    # print() has measurable overhead vs debugPrint() in hot paths; ban it.
+    avoid_print: true
+    # Catch unawaited futures that silently swallow errors.
+    unawaited_futures: true
+    # Enforce that catch clauses always re-examine the error type.
+    avoid_catches_without_on_clauses: false  # too noisy for general use
+
+    # ── Style ───────────────────────────────────────────────────────────────────────
+    prefer_single_quotes: true
 
 # Additional information about this file can be found at
 # https://dart.dev/guides/language/analysis-options

@@ -17,12 +17,17 @@ class CogniTrackApp extends StatefulWidget {
   final SQLiteStore sqliteStore;
   final SyncEngine syncEngine;
   final bool hasSeenOnboarding;
+  // Passed from the flavor entrypoint (main_demo.dart vs main_live.dart).
+  // true  → demo flavor: Google Sign-In bypassed, no Firestore writes.
+  // false → live flavor: real Google Sign-In, full Firestore sync.
+  final bool isDemo;
 
   const CogniTrackApp({
     super.key,
     required this.sqliteStore,
     required this.syncEngine,
     required this.hasSeenOnboarding,
+    this.isDemo = false, // safe default — legacy main.dart passes nothing
   });
 
   @override
@@ -38,13 +43,15 @@ class _CogniTrackAppState extends State<CogniTrackApp> {
   late final router = buildRouter(
     authProvider: _authProvider,
     permissionsProvider: _permissionsProvider,
-    hasSeenOnboarding: widget.hasSeenOnboarding,
   );
 
   @override
   void initState() {
     super.initState();
-    _authProvider = AuthProvider();
+    _authProvider = AuthProvider(
+      hasSeenOnboarding: widget.hasSeenOnboarding,
+      isDemo: widget.isDemo,
+    );
     // MISS-02 FIX: main.dart calls startForegroundService() before runApp().
     // Pass skipServiceStart: true so check() does not start the service again
     // and cause duplicate event batches in the first polling cycle.

@@ -20,7 +20,6 @@ import '../ui/screens/splash_screen.dart';
 GoRouter buildRouter({
   required AuthProvider authProvider,
   required PermissionsProvider permissionsProvider,
-  required bool hasSeenOnboarding,
 }) {
   return GoRouter(
     initialLocation: '/splash',
@@ -37,7 +36,7 @@ GoRouter buildRouter({
             loc == '/auth/sign-up') {
           return null;
         }
-        if (!hasSeenOnboarding) return '/onboarding';
+        if (!auth.hasSeenOnboarding) return '/onboarding';
         return '/auth/sign-in';
       }
 

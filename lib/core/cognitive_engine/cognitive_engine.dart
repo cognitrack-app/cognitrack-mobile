@@ -53,10 +53,8 @@ CognitiveReport calculateCognitiveDebt(List<AppEvent> events) {
       cognitiveLoadPct: 0,
       wmCapacityRemaining: wmInitial,
       residueAtEOD: 0,
-      hourlyDebt: List.filled(24, 0),
-      // BUG-08: null, not 0 — there are no events so there is no peak hour.
-      // 0 would be misread as midnight by the dashboard label.
-      peakLoadHour: null,
+      hourlyDebt: List.filled(24, 0.0),
+      peakLoadHour: 0,
     );
   }
 
@@ -87,10 +85,8 @@ CognitiveReport calculateCognitiveDebt(List<AppEvent> events) {
     if (event.eventType == EventType.switch_) {
       final timeSinceLast = (event.timestamp - state.lastSwitchTs).toDouble();
 
-      // NOTE: Do NOT pre-decay state.residue here.
-      // applySwitch() (Step 5) calls decayResidue() internally.
-      // A pre-decay here would decay residue twice per event, halving
-      // the effective TAU from 23 min to ~11.5 min (Leroy 2009 violation).
+      // 1. Decay existing residue (replicating desktop parity)
+      state.residue = decayResidue(state.residue, timeSinceLast);
 
       // 2. Context distance (switch cost)
       final switchCost = lastCategory != null
@@ -107,9 +103,8 @@ CognitiveReport calculateCognitiveDebt(List<AppEvent> events) {
       // 4. Adjusted switch cost
       final adjustedCost = switchCost * velocityMult;
 
-      // 5. Decay old residue and stack new residue — single decay pass.
-      //    applySwitch() applies e^(-timeSinceLast/TAU_MS) then adds switchCost.
-      state.residue = applySwitch(state.residue, timeSinceLast, switchCost);
+      // 5. Stack new residue on top of decayed old residue (use adjustedCost)
+      state.residue = applySwitch(state.residue, timeSinceLast, adjustedCost);
 
       // 6. Deplete working memory
       state.wmCapacity = updateWorkingMemory(
@@ -168,35 +163,19 @@ CognitiveReport calculateCognitiveDebt(List<AppEvent> events) {
       .toList();
 
   // Peak hour = hour with highest normalised load.
-  // BUG-08: if every bucket is 0 (no switch events today) the default index 0
-  // would be a false "midnight peak". Return null instead.
-  int? peakLoadHour;
-  if (hourlyDebt.any((v) => v > 0)) {
-    peakLoadHour = 0;
-    for (int i = 1; i < 24; i++) {
-      if (hourlyDebt[i] > hourlyDebt[peakLoadHour!]) peakLoadHour = i;
-    }
+  int peakLoadHour = 0;
+  for (int i = 1; i < 24; i++) {
+    if (hourlyDebt[i] > hourlyDebt[peakLoadHour]) peakLoadHour = i;
   }
 
   final cognitiveLoadPct =
       ((totalDebt / dailyDebtThreshold) * 100).clamp(0, 100).roundToDouble();
 
-  // ─── BUG-04: Decay residue to true end-of-day (midnight) ────────────────
-  // residueAtEOD was previously captured at the last event's timestamp.
-  // Apply one final decay pass from the last event to midnight so the
-  // stored value reflects the state a user's brain is actually in at EOD.
-  final lastEventTs = sorted.last.timestamp;
-  final now = DateTime.fromMillisecondsSinceEpoch(lastEventTs);
-  final midnight = DateTime(now.year, now.month, now.day + 1) // next calendar day 00:00
-      .millisecondsSinceEpoch;
-  final msToMidnight = (midnight - lastEventTs).toDouble();
-  final residueAtEOD = decayResidue(state.residue, msToMidnight);
-
   return CognitiveReport(
     cognitiveDebt: (totalDebt * 10).roundToDouble() / 10,
     cognitiveLoadPct: cognitiveLoadPct,
     wmCapacityRemaining: state.wmCapacity,
-    residueAtEOD: (residueAtEOD * 1000).roundToDouble() / 1000,
+    residueAtEOD: (state.residue * 1000).roundToDouble() / 1000,
     hourlyDebt: hourlyDebt,
     peakLoadHour: peakLoadHour,
   );

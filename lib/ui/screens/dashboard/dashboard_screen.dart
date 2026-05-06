@@ -2,8 +2,10 @@
 /// Animations re-trigger on every metrics load, not just first open.
 /// Android-optimised: RepaintBoundary on every heavy widget, no blur filters,
 /// all animations use easeOutCubic curves @ 60fps-safe durations.
+// ignore_for_file: prefer_const_constructors, prefer_const_literals_to_create_immutables
 library;
 
+import 'dart:async';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -20,6 +22,9 @@ import '../../../core/providers/dashboard_provider.dart';
 import '../../../core/providers/recovery_provider.dart';
 import '../../../core/database/sqlite_store.dart';
 import '../../../platform/ios/manual_session_logger.dart';
+import '../../../core/mock/mock_data_seeder.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'dart:io' as io;
 
 class DashboardScreen extends StatefulWidget {
@@ -147,16 +152,16 @@ class _DashboardScreenState extends State<DashboardScreen>
               final recoveryP = context.read<RecoveryProvider>();
               final logger = ManualSessionLogger(store: store);
               await logger.logFocusSession(30);
+              // Providers captured before await — safe to use after the gap.
               if (mounted) {
-                dashP.refresh();
+                unawaited(dashP.refresh());
                 try {
-                  recoveryP.load();
+                  unawaited(recoveryP.load());
                 } catch (_) {}
               }
             },
             child: Text('Log 30m',
-                style:
-                    AppTextStyles.chipLabel.copyWith(color: AppColors.good)),
+                style: AppTextStyles.chipLabel.copyWith(color: AppColors.good)),
           ),
         ],
       ),
@@ -192,17 +197,27 @@ class _DashboardScreenState extends State<DashboardScreen>
                       }),
                       const SizedBox(height: 3),
                       Row(children: [
-                        // Pulsing live dot
+                        // Pulsing live dot.
+                        // lastSyncMinutesAgo == -1 → never synced (connecting).
+                        // 0..19 → recently synced (live/green).
+                        // 20+  → stale (warn/amber).
                         _PulseDot(
-                            color: p.lastSyncMinutesAgo < 20
-                                ? AppColors.good
-                                : AppColors.warn),
-                        const SizedBox(width: 5),
-                        Text('LIVE TELEMETRY',
-                            style: AppTextStyles.chipLabel.copyWith(
-                                color: p.lastSyncMinutesAgo < 20
+                            color: p.lastSyncMinutesAgo < 0
+                                ? AppColors.warn
+                                : p.lastSyncMinutesAgo < 20
                                     ? AppColors.good
-                                    : AppColors.warn)),
+                                    : AppColors.warn),
+                        const SizedBox(width: 5),
+                        Text(
+                            p.lastSyncMinutesAgo < 0
+                                ? 'CONNECTING...'
+                                : 'LIVE TELEMETRY',
+                            style: AppTextStyles.chipLabel.copyWith(
+                                color: p.lastSyncMinutesAgo < 0
+                                    ? AppColors.warn
+                                    : p.lastSyncMinutesAgo < 20
+                                        ? AppColors.good
+                                        : AppColors.warn)),
                       ]),
                     ],
                   ),
@@ -219,38 +234,89 @@ class _DashboardScreenState extends State<DashboardScreen>
                             width: 8,
                             height: 8,
                             decoration: const BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: AppColors.red),
+                                shape: BoxShape.circle, color: AppColors.red),
                           ),
                         ),
                     ]),
-                    onPressed: () {},
+                    onPressed: () {
+                      // H02 FIX: was onPressed: () {} — a dead no-op.
+                      // Show a contextual snackbar so the button does something.
+                      if (p.isCritical) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: const Text(
+                              'High cognitive load detected — consider a break.',
+                              style: TextStyle(color: Colors.white),
+                            ),
+                            backgroundColor: AppColors.primaryContainer,
+                            behavior: SnackBarBehavior.floating,
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10)),
+                          ),
+                        );
+                      } else {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: const Text(
+                              'No new alerts — cognitive load nominal.',
+                              style: TextStyle(color: Colors.white),
+                            ),
+                            backgroundColor: AppColors.surfaceHigh,
+                            behavior: SnackBarBehavior.floating,
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10)),
+                          ),
+                        );
+                      }
+                    },
                   ),
                   IconButton(
                     icon: const Icon(Icons.person_outline,
                         color: AppColors.textSecondary),
-                    onPressed: () {},
+                    onPressed: () => FirebaseAuth.instance.signOut(),
                   ),
                 ],
               ),
               const SizedBox(height: AppSpacing.md),
-              // Morphism title block
-              ShaderMask(
-                shaderCallback: (bounds) => LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    AppColors.textPrimary,
-                    AppColors.textPrimary.withValues(alpha: 0.75),
-                  ],
-                ).createShader(bounds),
+              // Plain text title — ShaderMask forces a saveLayer on Android
+              // which renders a visible white/grey rectangle artifact behind
+              // the text on every build. Use a solid color instead.
+              // DEBUG ONLY: long-press title to seed 14-day mock data
+              GestureDetector(
+                onLongPress: kDebugMode
+                    ? () async {
+                        // Capture providers before any await — fixes
+                        // use_build_context_synchronously analyzer warning.
+                        final store = context.read<SQLiteStore>();
+                        final dashP = context.read<DashboardProvider>();
+                        final recoveryP = context.read<RecoveryProvider>();
+                        final messenger = ScaffoldMessenger.of(context);
+                        await MockDataSeeder(store: store).seed();
+                        if (mounted) {
+                          await dashP.refresh();
+                          try {
+                            await recoveryP.load();
+                          } catch (_) {}
+                          messenger.showSnackBar(
+                            SnackBar(
+                              content: const Text(
+                                '✅ Mock data seeded — 14 days loaded.',
+                                style: TextStyle(color: Colors.white),
+                              ),
+                              backgroundColor: AppColors.good,
+                              behavior: SnackBarBehavior.floating,
+                              duration: const Duration(seconds: 3),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10)),
+                            ),
+                          );
+                        }
+                      }
+                    : null,
                 child: Text(
                   'Daily Brain\nLoad',
-                  style: AppTextStyles.display.copyWith(
-                    fontSize: 34,
-                    fontWeight: FontWeight.w800,
-                    height: 1.12,
-                    color: Colors.white, // ShaderMask overrides this
+                  style: AppTextStyles.displayLg.copyWith(
+                    color: AppColors.textPrimary,
                   ),
                 ),
               ),
@@ -299,9 +365,8 @@ class _DashboardScreenState extends State<DashboardScreen>
                   value: p.totalSwitches.toDouble(),
                   suffix: '',
                   subText: p.isHighVolatility ? '⚠ High Volatility' : null,
-                  glowColor: p.isHighVolatility
-                      ? AppColors.warn
-                      : AppColors.red,
+                  glowColor:
+                      p.isHighVolatility ? AppColors.warn : AppColors.red,
                   animationDelay: const Duration(milliseconds: 80),
                 ),
               ),
@@ -365,16 +430,13 @@ class _DashboardScreenState extends State<DashboardScreen>
       child: Container(
         height: 38,
         decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              AppColors.surfaceHigh,
-              AppColors.surface,
-            ],
+          // Flat surface fill — no gradient (Stitch No-Gradient rule)
+          color: AppColors.surfaceContainerHigh,
+          borderRadius: BorderRadius.circular(AppSpacing.cardR),
+          border: Border.all(
+            color: AppColors.outlineVariant.withValues(alpha: 0.15),
+            width: 0.6,
           ),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: AppColors.border, width: 0.6),
           boxShadow: [
             BoxShadow(
               color: Colors.black.withValues(alpha: 0.3),
@@ -394,20 +456,13 @@ class _DashboardScreenState extends State<DashboardScreen>
                   curve: Curves.easeOutCubic,
                   margin: const EdgeInsets.all(4),
                   decoration: BoxDecoration(
-                    gradient: selected
-                        ? const LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [Color(0xFFE53935), Color(0xFFB71C1C)],
-                          )
-                        : null,
-                    borderRadius: BorderRadius.circular(7),
+                    color: selected ? AppColors.red : null,
+                    borderRadius: BorderRadius.circular(8),
                     boxShadow: selected
                         ? [
                             BoxShadow(
-                              color: AppColors.red.withValues(alpha: 0.35),
-                              blurRadius: 8,
-                              offset: const Offset(0, 2),
+                              color: AppColors.red.withValues(alpha: 0.3),
+                              blurRadius: 20,
                             ),
                           ]
                         : null,
@@ -416,11 +471,9 @@ class _DashboardScreenState extends State<DashboardScreen>
                     child: AnimatedDefaultTextStyle(
                       duration: const Duration(milliseconds: 220),
                       style: AppTextStyles.chipLabel.copyWith(
-                        color:
-                            selected ? Colors.white : AppColors.textMuted,
-                        fontWeight: selected
-                            ? FontWeight.w700
-                            : FontWeight.w500,
+                        color: selected ? Colors.white : AppColors.textMuted,
+                        fontWeight:
+                            selected ? FontWeight.w700 : FontWeight.w500,
                       ),
                       child: Text(e.value),
                     ),
@@ -455,8 +508,7 @@ class _DashboardScreenState extends State<DashboardScreen>
   Widget _buildMetric4Grid(DashboardProvider p) {
     if (p.loading) {
       return const Padding(
-        padding: EdgeInsets.fromLTRB(
-            AppSpacing.lg, 18, AppSpacing.lg, 0),
+        padding: EdgeInsets.fromLTRB(AppSpacing.lg, 18, AppSpacing.lg, 0),
         child: ShimmerList(count: 2, itemHeight: 70),
       );
     }
@@ -464,8 +516,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     if (metrics == null || metrics.isEmpty) return const SizedBox.shrink();
 
     return Padding(
-      padding:
-          const EdgeInsets.fromLTRB(AppSpacing.lg, 18, AppSpacing.lg, 0),
+      padding: const EdgeInsets.fromLTRB(AppSpacing.lg, 18, AppSpacing.lg, 0),
       child: Column(
         children: [
           IntrinsicHeight(
@@ -477,10 +528,8 @@ class _DashboardScreenState extends State<DashboardScreen>
                     label: metrics.isNotEmpty ? metrics[0].label : '',
                     value: metrics.isNotEmpty ? metrics[0].value : '',
                     delta: metrics.isNotEmpty ? metrics[0].delta : '',
-                    dotColor:
-                        metrics.isNotEmpty ? metrics[0].dotColor : null,
-                    animationDelay:
-                        const Duration(milliseconds: 0),
+                    dotColor: metrics.isNotEmpty ? metrics[0].dotColor : null,
+                    animationDelay: const Duration(milliseconds: 0),
                   ),
                 ),
                 const SizedBox(width: AppSpacing.sectionGap),
@@ -489,10 +538,8 @@ class _DashboardScreenState extends State<DashboardScreen>
                     label: metrics.length > 1 ? metrics[1].label : '',
                     value: metrics.length > 1 ? metrics[1].value : '',
                     delta: metrics.length > 1 ? metrics[1].delta : '',
-                    dotColor:
-                        metrics.length > 1 ? metrics[1].dotColor : null,
-                    animationDelay:
-                        const Duration(milliseconds: 80),
+                    dotColor: metrics.length > 1 ? metrics[1].dotColor : null,
+                    animationDelay: const Duration(milliseconds: 80),
                   ),
                 ),
               ],
@@ -510,8 +557,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                       value: metrics[2].value,
                       delta: metrics[2].delta,
                       dotColor: metrics[2].dotColor,
-                      animationDelay:
-                          const Duration(milliseconds: 160),
+                      animationDelay: const Duration(milliseconds: 160),
                     ),
                   ),
                   if (metrics.length > 3) ...[
@@ -522,8 +568,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                         value: metrics[3].value,
                         delta: metrics[3].delta,
                         dotColor: metrics[3].dotColor,
-                        animationDelay:
-                            const Duration(milliseconds: 240),
+                        animationDelay: const Duration(milliseconds: 240),
                       ),
                     ),
                   ] else
@@ -541,11 +586,9 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   Widget _buildNeuralObservation(DashboardProvider p) {
     return Padding(
-      padding:
-          const EdgeInsets.fromLTRB(AppSpacing.lg, 14, AppSpacing.lg, 0),
-      child: p.loading
-          ? const ShimmerCard(height: 110)
-          : _AnimatedNeuralObs(p: p),
+      padding: const EdgeInsets.fromLTRB(AppSpacing.lg, 14, AppSpacing.lg, 0),
+      child:
+          p.loading ? const ShimmerCard(height: 110) : _AnimatedNeuralObs(p: p),
     );
   }
 }
@@ -556,8 +599,7 @@ class _DashboardScreenState extends State<DashboardScreen>
 
 /// Full-width hero card for Cog Debt Points with animated ring.
 class _CogDebtHeroCard extends StatefulWidget {
-  const _CogDebtHeroCard(
-      {required this.p, required this.animationDelay});
+  const _CogDebtHeroCard({required this.p, required this.animationDelay});
   final DashboardProvider p;
   final Duration animationDelay;
 
@@ -578,14 +620,11 @@ class _CogDebtHeroCardState extends State<_CogDebtHeroCard>
     _ctrl = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 700));
     _fade = CurvedAnimation(
-        parent: _ctrl,
-        curve: const Interval(0.0, 0.6, curve: Curves.easeOut));
-    _slide = Tween<Offset>(
-            begin: const Offset(0, 0.07), end: Offset.zero)
+        parent: _ctrl, curve: const Interval(0.0, 0.6, curve: Curves.easeOut));
+    _slide = Tween<Offset>(begin: const Offset(0, 0.07), end: Offset.zero)
         .animate(CurvedAnimation(
             parent: _ctrl,
-            curve: const Interval(0.0, 0.65,
-                curve: Curves.easeOutCubic)));
+            curve: const Interval(0.0, 0.65, curve: Curves.easeOutCubic)));
     _sweep = CurvedAnimation(
         parent: _ctrl,
         curve: const Interval(0.2, 1.0, curve: Curves.easeInOut));
@@ -629,33 +668,26 @@ class _CogDebtHeroCardState extends State<_CogDebtHeroCard>
               width: double.infinity,
               padding: const EdgeInsets.all(18),
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(
-                  color: AppColors.borderRed.withValues(alpha: 0.6),
-                  width: 0.8,
-                ),
+                borderRadius: BorderRadius.circular(AppSpacing.cardR),
                 boxShadow: [
+                  // Ambient Crimson shadow: 40px, 6% opacity
                   BoxShadow(
-                    color: AppColors.red.withValues(alpha: 0.12),
-                    blurRadius: 28,
+                    color: AppColors.shadowCrimson.withValues(alpha: 0.06),
+                    blurRadius: 40,
                     offset: const Offset(0, 8),
-                    spreadRadius: -4,
-                  ),
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.5),
-                    blurRadius: 20,
-                    offset: const Offset(0, 6),
                   ),
                 ],
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
+                // Stitch "Glass & Crimson" hero gradient:
+                // Radial from primary (#FFB3AD) to primaryContainer (#CC1020)
+                gradient: const RadialGradient(
+                  center: Alignment(-0.6, -0.6),
+                  radius: 1.2,
                   colors: [
-                    AppColors.surfaceHigh,
-                    const Color(0xFF1A0A0A), // deep red tint
+                    AppColors.surface,
+                    Color(0xFF1A0505), // deep crimson void
                     AppColors.surfaceDim,
                   ],
-                  stops: const [0.0, 0.6, 1.0],
+                  stops: [0.0, 0.55, 1.0],
                 ),
               ),
               child: Row(
@@ -725,8 +757,7 @@ class _HeroSweepPainter extends CustomPainter {
       ).createShader(Rect.fromLTWH(sweepX - 40, 0, 80, size.height));
     canvas.save();
     canvas.clipRRect(rrect);
-    canvas.drawRect(
-        Rect.fromLTWH(sweepX - 40, 0, 80, size.height), paint);
+    canvas.drawRect(Rect.fromLTWH(sweepX - 40, 0, 80, size.height), paint);
     canvas.restore();
   }
 
@@ -764,12 +795,9 @@ class _SmallMorphCellState extends State<_SmallMorphCell>
     super.initState();
     _ctrl = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 550));
-    _fade = CurvedAnimation(
-        parent: _ctrl, curve: Curves.easeOut);
-    _slide = Tween<Offset>(
-            begin: const Offset(0, 0.06), end: Offset.zero)
-        .animate(
-            CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
+    _fade = CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
+    _slide = Tween<Offset>(begin: const Offset(0, 0.06), end: Offset.zero)
+        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
     Future.delayed(widget.animationDelay, () {
       if (mounted) _ctrl.forward();
     });
@@ -802,7 +830,8 @@ class _SmallMorphCellState extends State<_SmallMorphCell>
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: AppColors.border, width: 0.7),
+              // Fix #4: Removed full-opacity border — violates No-Line rule.
+              // Tonal gradient (surfaceHigh → surfaceDim) provides containment.
               boxShadow: [
                 BoxShadow(
                   color: Colors.black.withValues(alpha: 0.35),
@@ -826,11 +855,10 @@ class _SmallMorphCellState extends State<_SmallMorphCell>
                     NtLabel(widget.label),
                     const SizedBox(height: 6),
                     Text(widget.value,
-                        style: AppTextStyles.metricValue
-                            .copyWith(fontSize: 20)),
+                        style:
+                            AppTextStyles.metricValue.copyWith(fontSize: 20)),
                     const SizedBox(height: 2),
-                    Text(widget.delta,
-                        style: AppTextStyles.deltaLabel),
+                    Text(widget.delta, style: AppTextStyles.deltaLabel),
                   ],
                 ),
                 if (widget.dotColor != null)
@@ -845,8 +873,7 @@ class _SmallMorphCellState extends State<_SmallMorphCell>
                         color: widget.dotColor,
                         boxShadow: [
                           BoxShadow(
-                            color: widget.dotColor!
-                                .withValues(alpha: 0.5),
+                            color: widget.dotColor!.withValues(alpha: 0.5),
                             blurRadius: 6,
                           ),
                         ],
@@ -884,10 +911,8 @@ class _ChartMorphCardState extends State<_ChartMorphCard>
     _ctrl = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 650));
     _fade = CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
-    _slide = Tween<Offset>(
-            begin: const Offset(0, 0.05), end: Offset.zero)
-        .animate(
-            CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
+    _slide = Tween<Offset>(begin: const Offset(0, 0.05), end: Offset.zero)
+        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
     _ctrl.forward();
   }
 
@@ -920,7 +945,8 @@ class _ChartMorphCardState extends State<_ChartMorphCard>
           child: Container(
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: AppColors.border, width: 0.7),
+              // Fix #5: Removed full-opacity border — violates No-Line rule.
+              // Tonal gradient provides visual separation already.
               boxShadow: [
                 BoxShadow(
                   color: Colors.black.withValues(alpha: 0.4),
@@ -951,8 +977,7 @@ class _ChartMorphCardState extends State<_ChartMorphCard>
                 const NtLabel('BIOMETRIC TELEMETRY'),
                 const SizedBox(height: 4),
                 Row(children: [
-                  Text('Weekly Pattern',
-                      style: AppTextStyles.sectionHead),
+                  Text('Weekly Pattern', style: AppTextStyles.cardTitle),
                   const Spacer(),
                   if (p.weeklyLoadValues.isNotEmpty)
                     Row(children: [
@@ -960,13 +985,12 @@ class _ChartMorphCardState extends State<_ChartMorphCard>
                           width: 6,
                           height: 6,
                           decoration: const BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: AppColors.red)),
+                              shape: BoxShape.circle, color: AppColors.red)),
                       const SizedBox(width: 4),
                       Text(
                         '${p.cogDebtPct.toStringAsFixed(0)}% Cog. Debt',
-                        style: AppTextStyles.chipLabel.copyWith(
-                            color: AppColors.red),
+                        style: AppTextStyles.chipLabel
+                            .copyWith(color: AppColors.red),
                       ),
                     ]),
                 ]),
@@ -987,22 +1011,17 @@ class _ChartMorphCardState extends State<_ChartMorphCard>
           : _HourlyBarChart(values: p.hourlyLoadValues),
       1 => p.weeklyLoadValues.isEmpty
           ? _emptyChart()
-          : _WeeklyChart(
-              values: p.weeklyLoadValues, peak: p.weeklyPeak),
+          : _WeeklyChart(values: p.weeklyLoadValues, peak: p.weeklyPeak),
       2 => p.monthlyLoadValues.isEmpty
           ? _emptyChart()
-          : _WeeklyChart(
-              values: p.monthlyLoadValues,
-              peak: p.monthlyPeak),
+          : _WeeklyChart(values: p.monthlyLoadValues, peak: p.monthlyPeak),
       _ => _emptyChart(),
     };
   }
 
   Widget _emptyChart() => SizedBox(
         height: 120,
-        child: Center(
-            child: Text('No data yet',
-                style: AppTextStyles.body)),
+        child: Center(child: Text('No data yet', style: AppTextStyles.body)),
       );
 }
 
@@ -1054,39 +1073,13 @@ class _AnimatedNeuralObsState extends State<_AnimatedNeuralObs>
       opacity: _fade,
       child: Container(
         width: double.infinity,
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: p.isCritical
-                ? AppColors.borderRed.withValues(alpha: 0.7)
-                : AppColors.border,
-            width: 0.8,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.35),
-              blurRadius: 16,
-              offset: const Offset(0, 5),
-              spreadRadius: -3,
+          border: Border(
+            left: BorderSide(
+              color: AppColors.red.withValues(alpha: 0.4),
+              width: 1,
             ),
-            if (p.isCritical)
-              BoxShadow(
-                color: AppColors.red.withValues(alpha: 0.06),
-                blurRadius: 20,
-              ),
-          ],
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              AppColors.surfaceHigh,
-              p.isCritical
-                  ? const Color(0xFF160808)
-                  : AppColors.surface,
-              AppColors.surfaceDim,
-            ],
-            stops: const [0.0, 0.5, 1.0],
           ),
         ),
         child: Column(
@@ -1179,6 +1172,8 @@ class _WeeklyChart extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    // Compute today's index dynamically: DateTime.monday==1 … sunday==7 → 0-based
+    final todayIndex = (DateTime.now().weekday - 1).clamp(0, 6);
     final spots = values
         .asMap()
         .entries
@@ -1195,27 +1190,51 @@ class _WeeklyChart extends StatelessWidget {
             bottomTitles: AxisTitles(
               sideTitles: SideTitles(
                 showTitles: true,
-                reservedSize: 22,
+                reservedSize: 30, // increased from 22 to fit dot below label
                 getTitlesWidget: (val, _) {
                   final i = val.toInt();
                   if (i < 0 || i >= days.length) {
                     return const SizedBox.shrink();
                   }
-                  return Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Text(days[i],
-                        style: AppTextStyles.chipLabel
-                            .copyWith(fontSize: 9)),
+                  final isToday = i == todayIndex;
+                  return SideTitleWidget(
+                    axisSide: AxisSide.bottom,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          days[i],
+                          style: AppTextStyles.chipLabel.copyWith(
+                            fontSize: 9,
+                            color: isToday
+                                ? AppColors.textPrimary
+                                : AppColors.textMuted,
+                            fontWeight:
+                                isToday ? FontWeight.w700 : FontWeight.w600,
+                          ),
+                        ),
+                        if (isToday)
+                          Container(
+                            margin: const EdgeInsets.only(top: 2),
+                            width: 5,
+                            height: 5,
+                            decoration: const BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: AppColors.red,
+                            ),
+                          ),
+                      ],
+                    ),
                   );
                 },
               ),
             ),
-            leftTitles: const AxisTitles(
-                sideTitles: SideTitles(showTitles: false)),
-            topTitles: const AxisTitles(
-                sideTitles: SideTitles(showTitles: false)),
-            rightTitles: const AxisTitles(
-                sideTitles: SideTitles(showTitles: false)),
+            leftTitles:
+                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            topTitles:
+                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            rightTitles:
+                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
           ),
           minY: 0,
           maxY: 100,
@@ -1230,8 +1249,7 @@ class _WeeklyChart extends StatelessWidget {
                 getDotPainter: (spot, _, __, ___) => FlDotCirclePainter(
                   radius: spot.y >= peak ? 5 : 0,
                   color: AppColors.red,
-                  strokeColor:
-                      AppColors.red.withValues(alpha: 0.3),
+                  strokeColor: AppColors.red.withValues(alpha: 0.3),
                   strokeWidth: 8,
                 ),
               ),
@@ -1263,8 +1281,7 @@ class _HourlyBarChart extends StatelessWidget {
     if (values.isEmpty) {
       return SizedBox(
         height: 120,
-        child: Center(
-            child: Text('No data today', style: AppTextStyles.body)),
+        child: Center(child: Text('No data today', style: AppTextStyles.body)),
       );
     }
     final groups = values.asMap().entries.map((e) {
@@ -1287,6 +1304,7 @@ class _HourlyBarChart extends StatelessWidget {
           backgroundColor: Colors.transparent,
           borderData: FlBorderData(show: false),
           gridData: const FlGridData(show: false),
+          groupsSpace: 2,
           titlesData: FlTitlesData(
             bottomTitles: AxisTitles(
               sideTitles: SideTitles(
@@ -1295,22 +1313,22 @@ class _HourlyBarChart extends StatelessWidget {
                 getTitlesWidget: (val, _) {
                   final h = val.toInt();
                   if (h % 6 != 0) return const SizedBox.shrink();
-                  return Padding(
-                    padding: const EdgeInsets.only(top: 4),
+                  return SideTitleWidget(
+                    axisSide: AxisSide.bottom,
                     child: Text(
-                        '${h.toString().padLeft(2, '0')}:00',
-                        style: AppTextStyles.chipLabel
-                            .copyWith(fontSize: 9)),
+                      '${h.toString().padLeft(2, '0')}:00',
+                      style: AppTextStyles.chipLabel.copyWith(fontSize: 9),
+                    ),
                   );
                 },
               ),
             ),
-            leftTitles: const AxisTitles(
-                sideTitles: SideTitles(showTitles: false)),
-            topTitles: const AxisTitles(
-                sideTitles: SideTitles(showTitles: false)),
-            rightTitles: const AxisTitles(
-                sideTitles: SideTitles(showTitles: false)),
+            leftTitles:
+                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            topTitles:
+                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            rightTitles:
+                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
           ),
           maxY: 100,
           barGroups: groups,

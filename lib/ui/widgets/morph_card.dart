@@ -1,16 +1,15 @@
 /// MorphCard — 3D glassmorphism card with depth, glow, and shimmer sweep.
-/// Android-optimised: uses RepaintBoundary, avoids ImageFilter blur on low-end.
+/// Rebuilt for the "Clinical Observer" design system.
 library;
 
 import 'package:flutter/material.dart';
+import 'dart:ui' show ImageFilter;
 import '../theme/app_colors.dart';
 
 class MorphCard extends StatefulWidget {
   const MorphCard({
     super.key,
     required this.child,
-    this.glowColor,
-    this.borderColor,
     this.padding,
     this.height,
     this.animateIn = false,
@@ -19,8 +18,6 @@ class MorphCard extends StatefulWidget {
   });
 
   final Widget child;
-  final Color? glowColor;
-  final Color? borderColor;
   final EdgeInsetsGeometry? padding;
   final double? height;
 
@@ -91,9 +88,6 @@ class _MorphCardState extends State<MorphCard>
 
   @override
   Widget build(BuildContext context) {
-    final glow = widget.glowColor ?? AppColors.red;
-    final border = widget.borderColor ?? AppColors.border;
-
     return RepaintBoundary(
       child: FadeTransition(
         opacity: _fadeAnim,
@@ -109,38 +103,44 @@ class _MorphCardState extends State<MorphCard>
                 child: child,
               );
             },
-            child: Container(
-              height: widget.height,
-              padding:
-                  widget.padding ?? const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: AppColors.surface,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: border, width: 0.8),
-                boxShadow: [
-                  // depth shadow
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.45),
-                    blurRadius: 20,
-                    offset: const Offset(0, 8),
-                    spreadRadius: -4,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20), // 20px blur
+                child: Container(
+                  height: widget.height,
+                  padding: widget.padding ?? const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    // surface_container_lowest at 92% opacity
+                    color: AppColors.surfaceLowest.withValues(alpha: 0.92),
+                    borderRadius: BorderRadius.circular(16),
+                    // Ghost Border Fallback
+                    border: Border.all(
+                      color: AppColors.outlineVariant.withValues(alpha: 0.15),
+                      width: 1.0,
+                    ),
+                    boxShadow: [
+                      // Ambient Shadows: blur 40px, 6% opacity, tinted Crimson
+                      BoxShadow(
+                        color: AppColors.shadowCrimson.withValues(alpha: 0.06),
+                        blurRadius: 40,
+                        offset: const Offset(0, 8),
+                      ),
+                    ],
+                    // Neural glow radial transition
+                    gradient: RadialGradient(
+                      center:
+                          const Alignment(0.8, -0.8), // 45 degree angle approx
+                      radius: 1.5,
+                      colors: [
+                        AppColors.primaryContainer.withValues(alpha: 0.15),
+                        AppColors.primary.withValues(alpha: 0.05),
+                        Colors.transparent,
+                      ],
+                      stops: const [0.0, 0.4, 1.0],
+                    ),
                   ),
-                  // glow
-                  BoxShadow(
-                    color: glow.withValues(alpha: 0.08),
-                    blurRadius: 24,
-                    offset: const Offset(0, 0),
-                  ),
-                ],
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    AppColors.surfaceHigh,
-                    AppColors.surface,
-                    AppColors.surfaceDim,
-                  ],
-                  stops: const [0.0, 0.5, 1.0],
+                  child: widget.child,
                 ),
               ),
             ),
@@ -161,8 +161,7 @@ class _SweepPainter extends CustomPainter {
     if (progress <= 0 || progress >= 1) return;
 
     final rect = Rect.fromLTWH(0, 0, size.width, size.height);
-    final rrect =
-        RRect.fromRectAndRadius(rect, const Radius.circular(16));
+    final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(16));
 
     // Sweep moves from left-outside to right-outside
     final sweepX = (progress * (size.width + 80)) - 40;
@@ -173,7 +172,7 @@ class _SweepPainter extends CustomPainter {
         end: Alignment.centerRight,
         colors: [
           Colors.white.withValues(alpha: 0.0),
-          Colors.white.withValues(alpha: 0.06),
+          Colors.white.withValues(alpha: 0.04), // subtle shimmer
           Colors.white.withValues(alpha: 0.0),
         ],
         stops: const [0.0, 0.5, 1.0],
@@ -183,8 +182,7 @@ class _SweepPainter extends CustomPainter {
 
     canvas.save();
     canvas.clipRRect(rrect);
-    canvas.drawRect(
-        Rect.fromLTWH(sweepX - 30, 0, 60, size.height), paint);
+    canvas.drawRect(Rect.fromLTWH(sweepX - 30, 0, 60, size.height), paint);
     canvas.restore();
   }
 

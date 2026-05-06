@@ -17,7 +17,7 @@ class NtLabel extends StatelessWidget {
       text,
       style: AppTextStyles.chipLabel.copyWith(
         color: color ?? AppColors.textMuted,
-        letterSpacing: 1.5,
+        letterSpacing: 0.5,
       ),
     );
   }

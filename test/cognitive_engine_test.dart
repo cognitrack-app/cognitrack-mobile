@@ -38,17 +38,22 @@ void main() {
   });
 
   group('computeVelocityMultiplier', () {
-    test('1 switch/min → 1.0', () => expect(computeVelocityMultiplier(1.0), closeTo(1.0, 0.001)));
-    test('4 switches/min → 2.5 cap', () => expect(computeVelocityMultiplier(4.0), closeTo(2.5, 0.001)));
-    test('2.5 switches/min → 1.75', () => expect(computeVelocityMultiplier(2.5), closeTo(1.75, 0.001)));
+    test('1 switch/min → 1.0',
+        () => expect(computeVelocityMultiplier(1.0), closeTo(1.0, 0.001)));
+    test('4 switches/min → 2.5 cap',
+        () => expect(computeVelocityMultiplier(4.0), closeTo(2.5, 0.001)));
+    test('2.5 switches/min → 1.75',
+        () => expect(computeVelocityMultiplier(2.5), closeTo(1.75, 0.001)));
   });
 
   group('contextDistance matrix', () {
     test('passiveWaste→productive = 9.0', () {
-      expect(contextDistance[Category.passiveWaste]?[Category.productive], equals(9.0));
+      expect(contextDistance[Category.passiveWaste]?[Category.productive],
+          equals(9.0));
     });
     test('productive→passiveWaste = 7.0', () {
-      expect(contextDistance[Category.productive]?[Category.passiveWaste], equals(7.0));
+      expect(contextDistance[Category.productive]?[Category.passiveWaste],
+          equals(7.0));
     });
     test('matrix is asymmetric', () {
       final pwP = contextDistance[Category.passiveWaste]?[Category.productive];
@@ -65,44 +70,69 @@ void main() {
       expect(r.hourlyDebt.length, equals(24));
     });
 
-    test('passiveWaste→productive produces more debt than productive→productive', () {
+    test(
+        'passiveWaste→productive produces more debt than productive→productive',
+        () {
       final low = calculateCognitiveDebt([
-        makeEvent(timestamp: t0, type: EventType.switch_, cat: Category.productive),
-        makeEvent(timestamp: t0 + 60000, type: EventType.switch_, cat: Category.productive),
+        makeEvent(
+            timestamp: t0, type: EventType.switch_, cat: Category.productive),
+        makeEvent(
+            timestamp: t0 + 60000,
+            type: EventType.switch_,
+            cat: Category.productive),
       ]);
       final high = calculateCognitiveDebt([
-        makeEvent(timestamp: t0, type: EventType.switch_, cat: Category.passiveWaste),
-        makeEvent(timestamp: t0 + 60000, type: EventType.switch_, cat: Category.productive),
+        makeEvent(
+            timestamp: t0, type: EventType.switch_, cat: Category.passiveWaste),
+        makeEvent(
+            timestamp: t0 + 60000,
+            type: EventType.switch_,
+            cat: Category.productive),
       ]);
       expect(high.cognitiveDebt, greaterThan(low.cognitiveDebt));
     });
 
     test('cognitiveLoadPct capped at 100 under heavy load', () {
-      final events = List.generate(200, (i) => makeEvent(
-        timestamp: t0 + i * 10000,
-        type: EventType.switch_,
-        cat: i.isEven ? Category.passiveWaste : Category.productive,
-      ));
-      expect(calculateCognitiveDebt(events).cognitiveLoadPct, lessThanOrEqualTo(100));
+      final events = List.generate(
+          200,
+          (i) => makeEvent(
+                timestamp: t0 + i * 10000,
+                type: EventType.switch_,
+                cat: i.isEven ? Category.passiveWaste : Category.productive,
+              ));
+      expect(calculateCognitiveDebt(events).cognitiveLoadPct,
+          lessThanOrEqualTo(100));
     });
 
     test('sustained productive focus ≥20 min rewards WM', () {
       final events = [
-        makeEvent(timestamp: t0, type: EventType.switch_, cat: Category.productive),
-        makeEvent(timestamp: t0 + 5 * 60000, type: EventType.pickup, cat: Category.productive),
-        makeEvent(timestamp: t0 + 10 * 60000, type: EventType.pickup, cat: Category.productive),
-        makeEvent(timestamp: t0 + 20 * 60000, type: EventType.pickup, cat: Category.productive),
+        makeEvent(
+            timestamp: t0, type: EventType.switch_, cat: Category.productive),
+        makeEvent(
+            timestamp: t0 + 5 * 60000,
+            type: EventType.pickup,
+            cat: Category.productive),
+        makeEvent(
+            timestamp: t0 + 10 * 60000,
+            type: EventType.pickup,
+            cat: Category.productive),
+        makeEvent(
+            timestamp: t0 + 20 * 60000,
+            type: EventType.pickup,
+            cat: Category.productive),
       ];
       final r = calculateCognitiveDebt(events);
       expect(r.wmCapacityRemaining, greaterThanOrEqualTo(wmInitial - 10));
     });
 
     test('hourlyDebt is 24 elements, all 0–100', () {
-      final events = List.generate(5, (i) => makeEvent(
-        timestamp: t0 + i * 30000,
-        type: EventType.switch_,
-        cat: i.isEven ? Category.social : Category.productive,
-      ));
+      final events = List.generate(
+          5,
+          (i) => makeEvent(
+                timestamp: t0 + i * 30000,
+                type: EventType.switch_,
+                cat: i.isEven ? Category.social : Category.productive,
+              ));
       final r = calculateCognitiveDebt(events);
       expect(r.hourlyDebt.length, equals(24));
       for (final h in r.hourlyDebt) {

@@ -1,4 +1,6 @@
 /// RecoveryProvider — radar data, countdown, efficiency log, debt arc, breaks.
+/// Reads live data from SQLiteStore (written by SyncEngine every 15 min).
+/// Break events derive from real AppEvents stored in SQLite.
 library;
 
 import 'dart:convert';
@@ -26,6 +28,8 @@ class BreakQualityEntry {
   });
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+
 class RecoveryProvider extends ChangeNotifier {
   final SQLiteStore _store;
 
@@ -37,46 +41,56 @@ class RecoveryProvider extends ChangeNotifier {
 
   RecoveryProvider({required SQLiteStore store}) : _store = store;
 
-  // ── Load ──────────────────────────────────────────────────────────────────
+  // ── Load ─────────────────────────────────────────────────────────────────
 
   Future<void> load() async {
-    loading = true;
+    // Only show shimmer on the very first load (no data yet).
+    final firstLoad = today == null;
+    if (firstLoad) {
+      loading = true;
+      notifyListeners();
+      await Future.delayed(const Duration(milliseconds: 300));
+    }
     error = null;
-    notifyListeners();
 
     try {
       final todayDate = DateFormat('yyyy-MM-dd').format(DateTime.now());
+
       today = await _store.getDailyMetrics(todayDate);
-      last7Days = (await _store.getMetricsHistory(days: 7)).reversed.toList();
-      todayBreaks = await _store.getBreaksForDate(todayDate);
+
+      // getMetricsHistory returns DESC — reverse for oldest-first chart order.
+      final raw = await _store.getMetricsHistory(days: 7);
+      last7Days = raw.reversed.toList();
+
+      // Load today's break/idle events from SQLite so breakQualityReport
+      // is derived from real detected breaks, not hardcoded values.
+      final allEvents = await _store.getEventsForDate(todayDate);
+      todayBreaks = allEvents
+          .where((e) =>
+              e.eventType == EventType.break_ || e.eventType == EventType.idle)
+          .toList();
     } catch (e, st) {
-      error = e.toString();
       debugPrint('[RecoveryProvider] load error: $e\n$st');
-    } finally {
-      loading = false;
-      notifyListeners();
+      error = e.toString();
     }
+
+    loading = false;
+    notifyListeners();
   }
 
-  // ── Radar pentagon values [0.0–1.0] ──────────────────────────────────────
-  // Axes: Dopamine, Focus, Recovery, WM Strain, Sleep (in order)
+  // ── Radar pentagon values [0.0–1.0] ───────────────────────────────────────
 
   List<double> get radarValues {
-    final load    = today?.cognitiveLoadPct ?? 0;
-    final wm      = today?.wmCapacityRemaining ?? 100;
+    final load = today?.cognitiveLoadPct ?? 0;
+    final wm = today?.wmCapacityRemaining ?? 100;
     final residue = today?.residueAtEOD ?? 0;
-    final screen  = today?.totalScreenTime ?? 8;
+    final screen = today?.totalScreenTime ?? 8;
 
-    // GAP-01 FIX: _RadarPentagonPainter maps value[i] → label[i].
-    // Labels array (recovery_screen.dart): ['FOCUS','RECOVERY','WM STRAIN','SLEEP','DOPAMINE']
-    // Previous order was [dopamine, focus, recovery, wmStrain, sleep] — every
-    // axis was showing the wrong metric (e.g. dopamine value on the FOCUS axis).
-    // Reordered to match label indices exactly.
-    final focus    = (wm / 100).clamp(0.0, 1.0);                    // index 0 → FOCUS
-    final recovery = max(0.0, 1 - residue);                          // index 1 → RECOVERY
-    final wmStrain = max(0.0, 1 - (wm / 100));                      // index 2 → WM STRAIN
-    final sleep    = max(0.0, (1 - (screen / 16))).clamp(0.0, 1.0); // index 3 → SLEEP
-    final dopamine = max(0.0, 1 - (load / 100));                    // index 4 → DOPAMINE
+    final focus = (wm / 100).clamp(0.0, 1.0);
+    final recovery = max(0.0, 1 - residue);
+    final wmStrain = max(0.0, 1 - (wm / 100));
+    final sleep = max(0.0, (1 - (screen / 16))).clamp(0.0, 1.0);
+    final dopamine = max(0.0, 1 - (load / 100));
 
     return [focus, recovery, wmStrain, sleep, dopamine];
   }
@@ -85,18 +99,16 @@ class RecoveryProvider extends ChangeNotifier {
 
   Duration get timeToReset {
     final now = DateTime.now();
-    final peakHour = today?.peakLoadHour ?? 14;
-    // Reset 8h after peak load
-    var resetDt = DateTime(now.year, now.month, now.day, peakHour).add(
-      const Duration(hours: 8),
-    );
+    final peakHour = today?.peakLoadHour ?? 15;
+    var resetDt = DateTime(now.year, now.month, now.day, peakHour)
+        .add(const Duration(hours: 8));
     if (resetDt.isBefore(now)) {
       resetDt = resetDt.add(const Duration(days: 1));
     }
     return resetDt.difference(now);
   }
 
-  // ── Efficiency log — 7-day cogLoad values ────────────────────────────────
+  // ── Efficiency log — 7-day cogLoad values ──────────────────────────────
 
   List<double> get efficiencyLog7Day =>
       last7Days.map((d) => d.cognitiveLoadPct).toList();
@@ -110,7 +122,7 @@ class RecoveryProvider extends ChangeNotifier {
         }
       }).toList();
 
-  // ── Cognitive debt arc — hourly breakdown ─────────────────────────────────
+  // ── Cognitive debt arc — hourly breakdown ──────────────────────────────
 
   List<double> get debtArcPoints {
     if (today == null) return List.filled(24, 0);
@@ -128,7 +140,7 @@ class RecoveryProvider extends ChangeNotifier {
 
   int get debtArcPeakHour {
     final pts = debtArcPoints;
-    if (pts.isEmpty) return today?.peakLoadHour ?? 14;
+    if (pts.isEmpty) return today?.peakLoadHour ?? 0;
     double peak = 0;
     int idx = 0;
     for (int i = 0; i < pts.length; i++) {
@@ -140,97 +152,98 @@ class RecoveryProvider extends ChangeNotifier {
     return idx;
   }
 
-  /// Net pts cleared today vs yesterday's closing value
   double get netDebtCleared {
     if (last7Days.length < 2) return 0;
     final todayDebt = last7Days.last.cognitiveDebt;
-    final yesterday = last7Days[last7Days.length - 2].cognitiveDebt;
-    return yesterday - todayDebt;
+    final yesterdayDebt = last7Days[last7Days.length - 2].cognitiveDebt;
+    return yesterdayDebt - todayDebt;
   }
 
-  // ── Break quality report ──────────────────────────────────────────────────
+  // ── Break quality report — derived from real SQLite break/idle events ────
+  //
+  // Each break event is a contiguous idle gap between app switches.
+  // We scan todayBreaks and pair the hourly load snapshot before and
+  // after each break window to compute recoveryDeltaPts and effectivePct.
 
   List<BreakQualityEntry> get breakQualityReport {
-    if (todayBreaks.isNotEmpty) {
-      return todayBreaks.asMap().entries.map((e) {
-        final event = e.value;
-        final dt = DateTime.fromMillisecondsSinceEpoch(event.timestamp);
-        final timeStr = DateFormat('hh:mm a').format(dt);
-        final before = today?.cognitiveLoadPct ?? 60;
-        final after = max(0.0, before - (event.durationMs / 60000 * 2));
-        return BreakQualityEntry(
-          time: timeStr,
-          breakType: _breakTypeLabel(e.key),
-          recoveryDeltaPts: before - after,
-          beforePct: before,
-          afterPct: after,
-          effectivePct: min(1.0, event.durationMs / 600000), // 10 min = 100%
-        );
-      }).toList();
+    if (todayBreaks.isEmpty) return [];
+
+    final hourly = debtArcPoints;
+    // hourly has 24 slots; guard against empty to avoid index errors.
+    if (hourly.isEmpty || hourly.every((v) => v == 0)) return [];
+
+    final entries = <BreakQualityEntry>[];
+
+    for (final event in todayBreaks) {
+      // Duration must be at least 5 minutes to qualify as a meaningful break.
+      if (event.durationMs < 5 * 60 * 1000) continue;
+
+      final breakDt = DateTime.fromMillisecondsSinceEpoch(event.timestamp);
+      final hourBefore = (breakDt.hour - 1).clamp(0, 23);
+      final hourAfter = breakDt.hour.clamp(0, 23);
+
+      final before = hourly[hourBefore];
+      final after = hourly[hourAfter];
+      final delta = before - after; // positive = load dropped = good recovery
+      final eff = before > 0 ? (delta / before).clamp(0.0, 1.0) : 0.0;
+
+      final timeLabel = DateFormat('HH:mm').format(breakDt);
+      final breakType = event.durationMs >= 20 * 60 * 1000
+          ? 'Extended Break'
+          : event.eventType == EventType.idle
+              ? 'Idle Window'
+              : 'Neural Breathwork';
+
+      entries.add(BreakQualityEntry(
+        time: timeLabel,
+        breakType: breakType,
+        recoveryDeltaPts: delta,
+        beforePct: before,
+        afterPct: after,
+        effectivePct: eff,
+      ));
+
+      // Cap at 5 entries to keep the UI readable.
+      if (entries.length >= 5) break;
     }
 
-    // FUNC-07 FIX: The Android ForegroundService emits ACTIVITY_RESUMED /
-    // ACTIVITY_PAUSED events, not eventType='break', so todayBreaks is always
-    // empty on Android. Fall back to detecting recovery windows directly from
-    // the hourlyLoad array: an hour where load drops below 20 after being
-    // above 40 is a genuine low-load recovery window.
-    if (today == null) return [];
-    final hourly = today!.hourlyLoadList;
-    final entries = <BreakQualityEntry>[];
-    for (int i = 1; i < hourly.length - 1; i++) {
-      if (hourly[i] < 20 && hourly[i - 1] > 40) {
-        final timeStr = '${i.toString().padLeft(2, '0')}:00';
-        final before = hourly[i - 1];
-        final after = i + 1 < hourly.length ? hourly[i + 1] : hourly[i];
-        final delta = (before - after).clamp(0.0, 100.0);
-        entries.add(BreakQualityEntry(
-          time: timeStr,
-          breakType: _breakTypeLabel(entries.length),
-          recoveryDeltaPts: delta,
-          beforePct: before,
-          afterPct: after,
-          effectivePct: (delta / 100).clamp(0.0, 1.0),
-        ));
-      }
-    }
     return entries;
   }
 
-  String _breakTypeLabel(int i) {
-    const types = [
-      'Neural Breathwork',
-      'Mindful Break',
-      'Physical Reset',
-      'Micro-Rest'
-    ];
-    return types[i % types.length];
+  int get breaksAccepted => breakQualityReport.length;
+
+  // Cross-device stats — derived from real today metrics rather than hardcoded.
+  // crossDeviceEvents: total switch events (phone + desktop both write switches).
+  // crossDevicePts: approximate cognitive load contribution from switches.
+  int get crossDeviceEvents => today?.totalSwitches ?? 0;
+  int get crossDevicePts => ((today?.cognitiveDebt ?? 0) * 0.4).round();
+  String get crossDeviceLoadLabel {
+    final load = today?.cognitiveLoadPct ?? 0;
+    if (load == 0) return 'No data yet';
+    return 'Desktop sync — ${load.toStringAsFixed(0)}% load';
   }
 
-  // ── Cross-device load ─────────────────────────────────────────────────────
-
-  /// GAP-10: FirestoreClient has zero read methods — pulling desktop session
-  /// data onto the phone is not supported at launch. Return an honest stub
-  /// so the UI row doesn't crash. Full implementation requires adding a
-  /// getDesktopMetrics(date) read method to FirestoreClient.
-  String get crossDeviceLoadLabel => 'Desktop sync — pending';
-
-  // ── Tomorrow's readiness ──────────────────────────────────────────────────
+  // ── Tomorrow's readiness ───────────────────────────────────────────────
 
   double get tomorrowReadiness =>
       (100 - (today?.cognitiveLoadPct ?? 0)).clamp(0, 100).toDouble();
+
+  bool get hasNewAlerts =>
+      (today?.cognitiveLoadPct ?? 0) > 60 || unclearedDebt > 30;
 
   double get unclearedDebt => today?.cognitiveDebt ?? 0;
 
   String get readinessConclusion {
     final debt = today?.cognitiveDebt ?? 0;
-    final load  = today?.cognitiveLoadPct ?? 0;
+    final load = today?.cognitiveLoadPct ?? 0;
 
-    // GAP-11 FIX: Old version returned generic tier text with no bedtime.
-    // UI design shows "Sleep before 11:30 PM to reach <40% baseline tomorrow."
-    // Compute a specific target bedtime: start from 23:00, subtract up to
-    // 90 minutes based on cognitive debt level so heavier debt → earlier bed.
-    final baseMinutes = 23 * 60; // 11:00 PM
-    final extraMinutes = ((debt / 50) * 30).clamp(0, 90).round(); // 0–90 min earlier
+    if (today == null) {
+      return 'No data recorded yet. CogniTrack will generate '
+          'a recovery plan once it has tracked your activity today.';
+    }
+
+    final baseMinutes = 23 * 60;
+    final extraMinutes = ((debt / 50) * 30).clamp(0, 90).round();
     final targetMinutes = baseMinutes - extraMinutes;
     final tH = targetMinutes ~/ 60;
     final tM = targetMinutes % 60;

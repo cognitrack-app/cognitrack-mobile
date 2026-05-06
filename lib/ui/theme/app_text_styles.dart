@@ -1,5 +1,7 @@
 /// CogniTrack design system — typography tokens.
-/// Uses Google Fonts: Inter (display/body) + JetBrains Mono (countdown timer).
+/// Built for the "Clinical Observer" system.
+/// High-contrast typographic hierarchy: Plus Jakarta Sans for massive,
+/// authoritative headers. Inter for clinical, precise metadata.
 library;
 
 import 'package:flutter/material.dart';
@@ -7,63 +9,92 @@ import 'package:google_fonts/google_fonts.dart';
 import 'app_colors.dart';
 
 abstract final class AppTextStyles {
-  // Display — "Daily Brain Load", "Recovery Plan"
-  static final TextStyle display = GoogleFonts.inter(
-        fontSize: 28,
-        fontWeight: FontWeight.w800,
-        color: AppColors.textPrimary,
-      );
+  // ── Display & Headlines (Plus Jakarta Sans) ──────────────────────────
 
-  // Big metric values — "73%", "82", "6.4h"
-  static final TextStyle metricValue = GoogleFonts.inter(
-        fontSize: 26,
-        fontWeight: FontWeight.w700,
-        color: AppColors.textPrimary,
-      );
+  /// Extreme scale for cognitive scores (3.5rem = 56px per Stitch spec)
+  static final TextStyle displayLg = GoogleFonts.plusJakartaSans(
+    fontSize: 56,
+    fontWeight: FontWeight.w800,
+    color: AppColors.textPrimary,
+    height: 1.05,
+    letterSpacing: -1.5,
+  );
 
-  // Section headers — "Weekly Pattern", "Brain Load"
-  static final TextStyle sectionHead = GoogleFonts.inter(
-        fontSize: 22,
-        fontWeight: FontWeight.w700,
-        color: AppColors.textPrimary,
-      );
+  /// Standard display for high-priority numbers (1.75rem)
+  static final TextStyle display = GoogleFonts.plusJakartaSans(
+    fontSize: 28,
+    fontWeight: FontWeight.w700,
+    color: AppColors.textPrimary,
+    letterSpacing: -0.5,
+  );
 
-  // Card titles — "Focus Blocks", "Peak Stress"
-  static final TextStyle cardTitle = GoogleFonts.inter(
-        fontSize: 14,
-        fontWeight: FontWeight.w600,
-        color: AppColors.textPrimary,
-      );
+  /// Section headers (1.75rem) — semi-bold for "Clinical Observer" authority.
+  static final TextStyle sectionHead = GoogleFonts.plusJakartaSans(
+    fontSize: 28,
+    fontWeight: FontWeight.w600,
+    color: AppColors.textPrimary,
+    letterSpacing: -0.5,
+  );
 
-  // Uppercase tiny labels — "COG. DEBT", "NEURAL TELEMETRY"
-  static final TextStyle chipLabel = GoogleFonts.inter(
-        fontSize: 10,
-        fontWeight: FontWeight.w600,
-        letterSpacing: 1.2,
-        color: AppColors.textSecondary,
-      );
+  /// Bold section headers
+  static final TextStyle sectionHeadBold = GoogleFonts.plusJakartaSans(
+    fontSize: 36,
+    fontWeight: FontWeight.w300,
+    color: AppColors.textPrimary,
+    letterSpacing: -1.0,
+  );
 
-  // Body — Neural Observation paragraph
+  /// Card titles
+  static final TextStyle cardTitle = GoogleFonts.plusJakartaSans(
+    fontSize: 16,
+    fontWeight: FontWeight.w700,
+    color: AppColors.textPrimary,
+  );
+
+  // ── Body & Labels (Inter) ───────────────────────────────────────────
+
+  /// The workhorse. Technical, clean aesthetic.
   static final TextStyle body = GoogleFonts.inter(
-        fontSize: 13,
-        fontWeight: FontWeight.w400,
-        color: AppColors.textSecondary,
-        height: 1.6,
-      );
+    fontSize: 14,
+    fontWeight: FontWeight.w400,
+    color: AppColors.textSecondary,
+    height: 1.6,
+  );
 
-  // Countdown timer — [04:12:00]
-  static final TextStyle countdown = GoogleFonts.jetBrainsMono(
-        fontSize: 32,
-        fontWeight: FontWeight.w700,
-        color: AppColors.textPrimary,
-        letterSpacing: 2,
-      );
+  /// Dense, microscopic functional labels. The "HUD" elements.
+  static final TextStyle labelSm = GoogleFonts.inter(
+    fontSize: 11, // 0.6875rem
+    fontWeight: FontWeight.w600,
+    letterSpacing: 0.5, // +5% letter spacing
+    color: AppColors.textMuted,
+  );
 
-  // Small delta labels — "+12% VS LAST MONTH"
+  /// Chip/Tag label
+  static final TextStyle chipLabel = GoogleFonts.inter(
+    fontSize: 10,
+    fontWeight: FontWeight.w700,
+    letterSpacing: 1.2,
+    color: AppColors.textSecondary,
+  );
+
+  /// Small delta labels
   static final TextStyle deltaLabel = GoogleFonts.inter(
-        fontSize: 10,
-        fontWeight: FontWeight.w500,
-        letterSpacing: 0.8,
-        color: AppColors.textMuted,
-      );
+    fontSize: 10,
+    fontWeight: FontWeight.w600,
+    letterSpacing: 0.8,
+    color: AppColors.textMuted,
+  );
+
+  // ── Specialty ───────────────────────────────────────────────────────
+
+  /// Countdown timer — uses JetBrains Mono for a technical look.
+  static final TextStyle countdown = GoogleFonts.jetBrainsMono(
+    fontSize: 32,
+    fontWeight: FontWeight.w700,
+    color: AppColors.textPrimary,
+    letterSpacing: 2,
+  );
+
+  /// Alias for metric values.
+  static final TextStyle metricValue = display;
 }
