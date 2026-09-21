@@ -123,12 +123,14 @@ class CognitiveReport {
 
 class CategoryBreakdown {
   final double productive;
+  final double tools;
   final double entertainment;
   final double social;
   final double passiveWaste;
 
   const CategoryBreakdown({
     required this.productive,
+    required this.tools,
     required this.entertainment,
     required this.social,
     required this.passiveWaste,
@@ -136,6 +138,7 @@ class CategoryBreakdown {
 
   Map<String, dynamic> toMap() => {
         'productive': productive,
+        'tools': tools,
         'entertainment': entertainment,
         'social': social,
         'passiveWaste': passiveWaste,
@@ -144,6 +147,7 @@ class CategoryBreakdown {
   factory CategoryBreakdown.fromMap(Map<String, dynamic> m) =>
       CategoryBreakdown(
         productive: (m['productive'] as num?)?.toDouble() ?? 0,
+        tools: (m['tools'] as num?)?.toDouble() ?? 0,
         entertainment: (m['entertainment'] as num?)?.toDouble() ?? 0,
         social: (m['social'] as num?)?.toDouble() ?? 0,
         passiveWaste: (m['passiveWaste'] as num?)?.toDouble() ?? 0,
@@ -209,6 +213,7 @@ class PhoneSyncPayload {
   // CRITICAL-1 FIX: break_events was missing. Cloud Function now receives
   // phone break data for recovery radar and verified break minutes.
   final List<BreakEvent> breakEvents;
+  final int schemaVersion; // Payload schema version for migration
 
   const PhoneSyncPayload({
     required this.date,
@@ -227,6 +232,7 @@ class PhoneSyncPayload {
     required this.hourlyLoad,
     required this.lastUpdated,
     this.breakEvents = const [],
+    required this.schemaVersion,
   });
 
   Map<String, dynamic> toFirestore() => {
@@ -249,5 +255,6 @@ class PhoneSyncPayload {
         // CRITICAL-1 FIX: serialise break events so Cloud Function can compute
         // recovery_verified_break_minutes and recovery_radar.recovery for phone.
         'break_events': breakEvents.map((b) => b.toMap()).toList(),
+        'schemaVersion': schemaVersion,
       };
 }

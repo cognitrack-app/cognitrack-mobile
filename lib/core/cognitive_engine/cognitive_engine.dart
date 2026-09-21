@@ -40,6 +40,10 @@ int _getLocalHour(int timestampMs) {
   return DateTime.fromMillisecondsSinceEpoch(timestampMs).hour;
 }
 
+// ─── Pickup penalty constant (matches TS) ─────────────────────────────────────
+
+const double pickupPenalty = 3.5;
+
 // ─── Main Cognitive Engine ───────────────────────────────────────────────────
 
 /// Run the full cognitive state machine over a day's worth of AppEvents.
@@ -71,6 +75,7 @@ CognitiveReport calculateCognitiveDebt(List<AppEvent> events) {
   );
 
   Category? lastCategory;
+  DeviceType? lastDeviceType;
   double totalDebt = 0;
 
   // Raw debt accumulated per hour (index = 0–23)
@@ -93,36 +98,43 @@ CognitiveReport calculateCognitiveDebt(List<AppEvent> events) {
           ? (contextDistance[lastCategory]?[event.category] ?? 1.0)
           : 1.0;
 
-      // 3. Velocity multiplier (count switches in last 5 min)
+      // 3. Cross-device multiplier: apply 2.2× when switching between phone and desktop
+      // This matches TS: isCrossDevice = prev.deviceType !== curr.deviceType
+      final isCrossDevice = lastDeviceType != null &&
+          lastDeviceType != event.deviceType;
+      final deviceMult = isCrossDevice ? crossDeviceMultiplier : 1.0;
+
+      // 4. Velocity multiplier (count switches in last 5 min)
       final fiveMinAgo = event.timestamp - 5 * 60000;
       recentSwitchTs.removeWhere((ts) => ts < fiveMinAgo);
       recentSwitchTs.add(event.timestamp);
       final switchesPerMin = recentSwitchTs.length / 5.0;
       final velocityMult = computeVelocityMultiplier(switchesPerMin);
 
-      // 4. Adjusted switch cost
-      final adjustedCost = switchCost * velocityMult;
+      // 5. Adjusted switch cost: context distance × velocity × cross-device
+      final adjustedCost = switchCost * velocityMult * deviceMult;
 
-      // 5. Stack new residue on top of decayed old residue (use adjustedCost)
+      // 6. Stack new residue on top of decayed old residue (use adjustedCost)
       state.residue = applySwitch(state.residue, timeSinceLast, adjustedCost);
 
-      // 6. Deplete working memory
+      // 7. Deplete working memory
       state.wmCapacity = updateWorkingMemory(
         state.wmCapacity,
         adjustedCost,
       );
 
-      // 7. Reset focus depth on any switch
+      // 8. Reset focus depth on any switch
       state.focusDepth = 0;
 
-      // 8. Compute debt contribution: cost amplified by residue
+      // 9. Compute debt contribution: cost amplified by residue
       final debtContribution = adjustedCost * (1 + state.residue);
       totalDebt += debtContribution;
       hourlyRaw[hour] += debtContribution;
 
-      // 9. Update state
+      // 10. Update state
       state.lastSwitchTs = event.timestamp;
       lastCategory = event.category;
+      lastDeviceType = event.deviceType;
     } else if (event.eventType == EventType.break_ ||
         event.eventType == EventType.idle) {
       // Reward verified break
@@ -135,8 +147,23 @@ CognitiveReport calculateCognitiveDebt(List<AppEvent> events) {
       lastCategory = null;
       // Reset velocity window after a real break
       recentSwitchTs.clear();
+    } else if (event.eventType == EventType.pickup) {
+      // 3. Cross-device multiplier for pickups: phone pickup during desktop work
+      // In practice, pickup events only come from phone, so this applies when
+      // the previous event was from desktop (cross-device transition).
+      final isCrossDevice = lastDeviceType != null &&
+          lastDeviceType == DeviceType.desktop;
+      final deviceMult = isCrossDevice ? crossDeviceMultiplier : 1.0;
+
+      // Apply pickup penalty with cross-device multiplier
+      final pickupCost = pickupPenalty * deviceMult;
+      totalDebt += pickupCost;
+      hourlyRaw[hour] += pickupCost;
+
+      // Pickups also add residue (they're interruptions)
+      state.residue = applySwitch(state.residue, 0, pickupCost);
     } else {
-      // eventType == pickup or uninterrupted active time
+      // eventType == uninterrupted active time (no switch)
       // Check for sustained focus reward
       final msSinceLast = event.timestamp - state.lastSwitchTs;
       if (msSinceLast >= focusBuildThresholdMs && lastCategory != null) {

@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:cognitrack_mobile/core/database/sqlite_store.dart';
@@ -13,7 +14,8 @@ void main() {
   late SQLiteStore store;
 
   setUp(() async {
-    store = SQLiteStore(dbName: inMemoryDatabasePath);
+    // Use unique database name for each test to ensure isolation
+    store = SQLiteStore(dbName: 'test_${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(10000)}.db');
   });
 
   tearDown(() async {

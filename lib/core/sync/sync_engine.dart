@@ -17,13 +17,14 @@ import 'dart:convert';
 import 'dart:io' as io;
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:intl/intl.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
 import '../cognitive_engine/cognitive_engine.dart';
 import '../cognitive_engine/models.dart';
 import '../cognitive_engine/break_extractor.dart'; // CRITICAL-1 FIX
+import '../cognitive_engine/constants.dart'; // schema version
 import '../database/sqlite_store.dart';
 import '../device_id.dart';
 import 'firestore_client.dart';
@@ -31,6 +32,57 @@ import 'package:flutter/foundation.dart' hide Category;
 import 'package:flutter/widgets.dart';
 import '../../platform/android/screen_on_receiver.dart';
 
+/// Sync health metrics for observability
+class SyncHealthMetrics {
+  final DateTime? lastSyncAt;
+  final DateTime? lastSyncAttemptAt;
+  final int pendingQueueSize;
+  final int failedSyncCount;
+  final int totalSyncsToday;
+  final int successfulSyncsToday;
+  final Duration? lastSyncDuration;
+  final String? lastError;
+  final bool isOnline;
+  final bool isSyncing;
+
+  const SyncHealthMetrics({
+    this.lastSyncAt,
+    this.lastSyncAttemptAt,
+    required this.pendingQueueSize,
+    required this.failedSyncCount,
+    required this.totalSyncsToday,
+    required this.successfulSyncsToday,
+    this.lastSyncDuration,
+    this.lastError,
+    required this.isOnline,
+    required this.isSyncing,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'lastSyncAt': lastSyncAt?.toIso8601String(),
+        'lastSyncAttemptAt': lastSyncAttemptAt?.toIso8601String(),
+        'pendingQueueSize': pendingQueueSize,
+        'failedSyncCount': failedSyncCount,
+        'totalSyncsToday': totalSyncsToday,
+        'successfulSyncsToday': successfulSyncsToday,
+        'lastSyncDurationMs': lastSyncDuration?.inMilliseconds,
+        'lastError': lastError,
+        'isOnline': isOnline,
+        'isSyncing': isSyncing,
+      };
+}
+
+/// SyncEngine — 15-minute batch sync of computed phone metrics to Firestore.
+///
+/// Sync triggers:
+///   1. Periodic timer (every 15 minutes)
+///   2. AppLifecycleState.paused (app goes to background)
+///   3. Manual pull-to-refresh
+///
+/// Offline behaviour:
+///   - Failed syncs are written to pending_sync SQLite table
+///   - Exponential backoff: 30s → 60s → 120s → 240s (max 4 retries)
+///   - Queue flushes automatically when connectivity is restored
 class SyncEngine with WidgetsBindingObserver {
   final SQLiteStore _store;
   final FirestoreClient _client;
@@ -41,10 +93,12 @@ class SyncEngine with WidgetsBindingObserver {
   Timer? _periodicTimer;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
   DateTime? _lastSyncAt;
-  // FUNC-09: track the last date we synced so we can detect a day rollover
-  // and reset the Android pickup counter at midnight.
+  DateTime? _lastSyncAttemptAt;
+  Duration? _lastSyncDuration;
+  String? _lastError;
+  int _successfulSyncsToday = 0;
+  int _totalSyncsToday = 0;
   String? _lastSyncDate;
-
   // B1 FIX: guard against concurrent syncNow() calls.
   // The 15-min timer, AppLifecycleState.paused, connectivity-restore, and
   // manual refresh() can all fire simultaneously. Without this flag,
@@ -59,6 +113,9 @@ class SyncEngine with WidgetsBindingObserver {
 
   static const _syncIntervalMinutes = 15;
 
+  // Metrics stream controller for real-time observability
+  final _metricsController = StreamController<SyncHealthMetrics>.broadcast();
+
   SyncEngine({
     required SQLiteStore store,
     required FirestoreClient client,
@@ -70,6 +127,39 @@ class SyncEngine with WidgetsBindingObserver {
         _connectivity = connectivity ?? Connectivity(),
         _screenOnReceiver = screenOnReceiver ?? ScreenOnReceiver(),
         _isDemo = isDemo;
+
+  /// Stream of sync health metrics for observability / debugging UI
+  Stream<SyncHealthMetrics> get metricsStream => _metricsController.stream;
+
+  /// Current sync health snapshot
+  Future<SyncHealthMetrics> getMetrics() async {
+    final pending = await _store.getReadyPendingSyncs();
+    final allPending = await _store.getAllPendingSyncs();
+    final failedCount = allPending.where((r) => r.retryCount >= 4).length;
+
+    // Check actual connectivity, not just that _connectivity object exists
+    final connectivityResults = await _connectivity.checkConnectivity();
+    final hasConnection = connectivityResults.any((r) => r != ConnectivityResult.none);
+
+    return SyncHealthMetrics(
+      lastSyncAt: _lastSyncAt,
+      lastSyncAttemptAt: _lastSyncAttemptAt,
+      pendingQueueSize: pending.length,
+      failedSyncCount: failedCount,
+      totalSyncsToday: _totalSyncsToday,
+      successfulSyncsToday: _successfulSyncsToday,
+      lastSyncDuration: _lastSyncDuration,
+      lastError: _lastError,
+      isOnline: _client.isAuthenticated && hasConnection,
+      isSyncing: _isSyncing,
+    );
+  }
+
+  void _emitMetrics() {
+    getMetrics().then(_metricsController.add).catchError((e) {
+      debugPrint('[SyncEngine] Failed to emit metrics: $e');
+    });
+  }
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
@@ -92,6 +182,7 @@ class SyncEngine with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _periodicTimer?.cancel();
     _connectivitySub?.cancel();
+    _metricsController.close();
   }
 
   @override
@@ -123,8 +214,33 @@ class SyncEngine with WidgetsBindingObserver {
     // B1 FIX: early-exit if a sync is already in progress.
     if (!_client.isAuthenticated || _isSyncing) return;
     _isSyncing = true;
+    _emitMetrics();
 
     final today = _todayDate();
+    final syncStart = DateTime.now();
+
+    // Reset daily counters on day rollover
+    if (_lastSyncDate != null && _lastSyncDate != today) {
+      _successfulSyncsToday = 0;
+      _totalSyncsToday = 0;
+    }
+    _totalSyncsToday++;
+
+    // DAY ROLLOVER FIX: Reset pickup counter at midnight regardless of sync success.
+    // The Kotlin BroadcastReceiver increments pickups continuously; if the device
+    // is offline at midnight, the counter would never reset, causing next day's
+    // pickups to be counted under the previous day. Check and reset here before
+    // building the payload so the correct daily count is used.
+    if (io.Platform.isAndroid &&
+        _lastSyncDate != null &&
+        _lastSyncDate != today) {
+      debugPrint('[SyncEngine] Day rollover detected: $_lastSyncDate → $today, resetting pickup counter');
+      await _screenOnReceiver.resetCounter().catchError(
+        (Object e) => debugPrint('[SyncEngine] resetCounter failed: $e'),
+      );
+    }
+    _lastSyncDate = today;
+
     // Build payload once. On Firestore failure, pass this same object to
     // _enqueuePendingSync so the retry queue always matches local DB state.
     // (BUG-B: avoids a second _buildPayload() call that races new events)
@@ -139,6 +255,9 @@ class SyncEngine with WidgetsBindingObserver {
       // Skip the upsert entirely and let the next 15-min tick do it properly.
       if (payload.totalSwitches == 0 && payload.totalScreenTime < 0.001) {
         debugPrint('[SyncEngine] no events yet — skipping zero upsert.');
+        _lastSyncAttemptAt = DateTime.now();
+        _lastSyncDuration = DateTime.now().difference(syncStart);
+        _emitMetrics();
         return;
       }
 
@@ -150,19 +269,10 @@ class SyncEngine with WidgetsBindingObserver {
       // Mark as synced in local DB
       await _store.markSynced(today);
       _lastSyncAt = DateTime.now();
-
-      // FUNC-09 FIX: resetCounter() is documented as "called at midnight" but
-      // was never called anywhere in Dart. The Kotlin BroadcastReceiver grows
-      // totalPickups indefinitely across days. Reset it on the first sync
-      // after midnight so each day's count starts fresh.
-      if (io.Platform.isAndroid &&
-          _lastSyncDate != null &&
-          _lastSyncDate != today) {
-        _screenOnReceiver.resetCounter().catchError(
-              (Object e) => debugPrint('[SyncEngine] resetCounter failed: $e'),
-            );
-      }
-      _lastSyncDate = today;
+      _lastSyncAttemptAt = DateTime.now();
+      _lastSyncDuration = DateTime.now().difference(syncStart);
+      _lastError = null;
+      _successfulSyncsToday++;
 
       // Also update device lastSeen
       await _client.updateDeviceLastSeen(payload.deviceId);
@@ -173,29 +283,22 @@ class SyncEngine with WidgetsBindingObserver {
       // Offline or transient error — enqueue the already-built payload.
       // If _buildPayload itself threw, payload is null and _enqueuePendingSync
       // will log + return without crashing.
+      _lastSyncAttemptAt = DateTime.now();
+      _lastSyncDuration = DateTime.now().difference(syncStart);
+      _lastError = e.toString();
       await _enqueuePendingSync(today, prebuiltPayload: payload);
     } finally {
       // B1 FIX: always release the guard, even on exception.
       _isSyncing = false;
+      _emitMetrics();
     }
   }
 
   // ── Payload builder ───────────────────────────────────────────────────────
 
-  // Maximum number of raw events passed into the compute() isolate.
-  // A 60-second poll cycle can emit 20–100 UsageStats events; on a heavy-usage
-  // day this grows into the thousands. The isolate message-passing cost scales
-  // linearly with list size — cap it to keep the sync cycle under ~100 ms.
-  // We always keep the *most recent* events so the debt calculation reflects
-  // current behaviour, not stale morning data.
-  static const _maxComputeEvents = 5000;
-
   Future<PhoneSyncPayload> _buildPayload(String date) async {
-    final allEvents = await _store.getEventsForDate(date);
-    final events = allEvents.length > _maxComputeEvents
-        ? allEvents.sublist(allEvents.length - _maxComputeEvents)
-        : allEvents;
-    final report = await compute(calculateCognitiveDebt, events);
+    final events = await _store.getEventsForDate(date);
+    final report = calculateCognitiveDebt(events);
 
     // Compute phone-specific extras
     final totalSwitches =
@@ -212,7 +315,7 @@ class SyncEngine with WidgetsBindingObserver {
     int left = 0;
     for (int right = 0; right < switchEvents.length; right++) {
       while (switchEvents[right].timestamp - switchEvents[left].timestamp >
-          300000) {
+          fiveMinMs) {
         left++;
       }
       final count = right - left + 1;
@@ -224,8 +327,11 @@ class SyncEngine with WidgetsBindingObserver {
     final totalMs = events.fold<int>(0, (sum, e) => sum + e.durationMs);
     final totalScreenTime = totalMs / 3600000.0;
 
-    // Category breakdown (% of screen time per category)
-    final breakdown = _computeCategoryBreakdown(events, totalMs);
+    // Category breakdown denominator: only switch events (active intent), matching desktop batchProcessor.ts
+    final switchMs = events
+        .where((e) => e.eventType == EventType.switch_)
+        .fold<int>(0, (sum, e) => sum + e.durationMs);
+    final breakdown = _computeCategoryBreakdown(events, switchMs);
 
     // CRITICAL-1 FIX: extract break events from idle markers so the Cloud
     // Function can compute recovery_verified_break_minutes and recovery radar.
@@ -250,45 +356,55 @@ class SyncEngine with WidgetsBindingObserver {
       hourlyLoad: report.hourlyDebt,
       lastUpdated: DateTime.now().toUtc().toIso8601String(),
       breakEvents: breakEvents, // CRITICAL-1 FIX
+      schemaVersion: syncPayloadSchemaVersion,
     );
   }
 
   CategoryBreakdown _computeCategoryBreakdown(
     List<AppEvent> events,
-    int totalMs,
+    int switchMs,
   ) {
-    if (totalMs == 0) {
+    if (switchMs == 0) {
       return const CategoryBreakdown(
-          productive: 0, entertainment: 0, social: 0, passiveWaste: 0);
+        productive: 0, tools: 0, entertainment: 0, social: 0, passiveWaste: 0);
     }
 
     final msPerCategory = <Category, int>{};
     for (final e in events) {
+      if (e.eventType != EventType.switch_) continue;
       msPerCategory[e.category] =
           (msPerCategory[e.category] ?? 0) + e.durationMs;
     }
 
-    // AND-16 FIX: Category.tools events contribute to totalMs (denominator)
-    // but appeared in NONE of the four CategoryBreakdown fields. On a developer
-    // device this silently deflates all percentages (sum could be 60-70%).
-    //
-    // Tools apps (Terminal, Settings, IDE) are cognitively active but not
-    // "productive content" in the phone usage sense. We fold them into the
-    // productive bucket (consistent with desktop batchProcessor which adds
-    // tools to totalFocusedMs). This ensures the four fields always sum to
-    // 100% and tools time is not silently discarded.
+    // Tools apps (Terminal, Settings, IDE) are cognitively active.
+    // Keep tools as a separate category to match desktop DesktopCategoryBreakdown (5 categories).
+    // This ensures cross-platform parity for fragmentation and category analysis.
+    // Only switch events are counted (active intent), matching desktop batchProcessor.ts.
     final toolsMs = msPerCategory[Category.tools] ?? 0;
-    final productiveMs = (msPerCategory[Category.productive] ?? 0) + toolsMs;
+    final productiveMs = msPerCategory[Category.productive] ?? 0;
 
-    // Compute percentages using the original totalMs as denominator so the
-    // absolute screen time proportions are preserved.
-    double pct(int ms) => (ms / totalMs * 100).clamp(0, 100);
+    // Compute raw percentages
+    double rawPct(int ms) => (ms / switchMs * 100);
+
+    final rawProductive = rawPct(productiveMs);
+    final rawTools = rawPct(toolsMs);
+    final rawEntertainment = rawPct(msPerCategory[Category.entertainment] ?? 0);
+    final rawSocial = rawPct(msPerCategory[Category.social] ?? 0);
+
+    // ROUNDING FIX: Use floor for first four categories, let passiveWaste absorb remainder
+    // so the sum is always exactly 100. Matches desktop batchProcessor.ts logic.
+    final productive = rawProductive.floor();
+    final tools = rawTools.floor();
+    final entertainment = rawEntertainment.floor();
+    final social = rawSocial.floor();
+    final passiveWaste = 100 - productive - tools - entertainment - social;
 
     return CategoryBreakdown(
-      productive: pct(productiveMs),
-      entertainment: pct(msPerCategory[Category.entertainment] ?? 0),
-      social: pct(msPerCategory[Category.social] ?? 0),
-      passiveWaste: pct(msPerCategory[Category.passiveWaste] ?? 0),
+      productive: productive.toDouble(),
+      tools: tools.toDouble(),
+      entertainment: entertainment.toDouble(),
+      social: social.toDouble(),
+      passiveWaste: passiveWaste.toDouble(),
     );
   }
 
@@ -322,7 +438,7 @@ class SyncEngine with WidgetsBindingObserver {
           payload: serialised,
           retryCount: 0,
           nextRetryAt: DateTime.now().millisecondsSinceEpoch +
-              30000, // first retry in 30s
+              backoffBaseMs, // first retry in 30s
         ));
       }
     } catch (e, st) {
@@ -346,6 +462,13 @@ class SyncEngine with WidgetsBindingObserver {
       try {
         final firestoreMap =
             Map<String, dynamic>.from(jsonDecode(row.payload) as Map);
+
+        // SCHEMA MIGRATION: Handle older payload versions gracefully.
+        // v1 payloads won't have schemaVersion or break_events.
+        // Default schemaVersion to 1 for backward compatibility.
+        final schemaVersion =
+            (firestoreMap['schemaVersion'] as num?)?.toInt() ?? 1;
+
         final payload = PhoneSyncPayload(
           date: firestoreMap['date'] as String,
           deviceId: firestoreMap['deviceId'] as String,
@@ -370,6 +493,21 @@ class SyncEngine with WidgetsBindingObserver {
               .map((e) => (e as num).toDouble())
               .toList(),
           lastUpdated: firestoreMap['lastUpdated'] as String,
+          breakEvents: schemaVersion >= 2
+              ? (firestoreMap['break_events'] as List? ?? [])
+                  .map((b) => BreakEvent(
+                        startTime: b['start_time'] as String,
+                        endTime: b['end_time'] as String,
+                        activityType: b['activity_type'] as String,
+                        durationMinutes: (b['duration_minutes'] as num).toInt(),
+                        debtBefore: (b['debt_before'] as num).toDouble(),
+                        debtAfter: (b['debt_after'] as num).toDouble(),
+                        ptsRecovered: (b['pts_recovered'] as num).toDouble(),
+                        efficiencyPct: (b['efficiency_pct'] as num).toInt(),
+                      ))
+                  .toList()
+              : const [],
+          schemaVersion: schemaVersion,
         );
 
         await _client.writePhoneMetrics(payload);
@@ -381,7 +519,7 @@ class SyncEngine with WidgetsBindingObserver {
         // Increment retry count with backoff
         if (row.id != null) {
           final backoffMs =
-              30000 * (1 << row.retryCount); // 30s, 60s, 120s, 240s
+              backoffBaseMs * (1 << row.retryCount); // 30s, 60s, 120s, 240s
           await _store.updatePendingSyncRetry(
             row.id!,
             row.retryCount + 1,
@@ -424,6 +562,17 @@ class SyncEngine with WidgetsBindingObserver {
 
   String? _cachedDeviceId;
 
+  // Secure storage for iOS fallback device ID (survives app reinstall, backup/restore)
+  static const _secureStorage = FlutterSecureStorage(
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+    iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock_this_device),
+  );
+  static const _fallbackKey = 'cognitrack_fallback_device_uuid';
+  // App Group identifier for cross-extension data sharing (iOS)
+  // Must match the App Group configured in Xcode (e.g., "group.cognitrack")
+  static const _appGroupId = 'group.cognitrack';
+  static const _fallbackKeyAppGroup = 'cognitrack_fallback_device_uuid_appgroup';
+
   Future<String> _getDeviceId() async {
     if (_cachedDeviceId != null) return _cachedDeviceId!;
     final info = DeviceInfoPlugin();
@@ -434,18 +583,24 @@ class SyncEngine with WidgetsBindingObserver {
     } else {
       final ios = await info.iosInfo;
       // BUG-03: identifierForVendor is null after factory reset / MDM.
-      // Fall back to a persistent random UUID so every device gets a unique
-      // ID rather than all colliding on the same SHA-256('unknown-ios').
+      // Fall back to a persistent random UUID stored in Keychain so every
+      // device gets a unique ID rather than all colliding on the same
+      // SHA-256('unknown-ios'). Keychain survives app reinstall and backup/restore.
       final idfv = ios.identifierForVendor;
       if (idfv != null && idfv.isNotEmpty) {
         rawId = idfv;
       } else {
-        const prefKey = 'cognitrack_fallback_device_uuid';
-        final prefs = await SharedPreferences.getInstance();
-        var stored = prefs.getString(prefKey);
+        // Try App Group first (shared with DeviceActivityMonitorExtension)
+        var stored = await _secureStorage.read(key: _fallbackKeyAppGroup, aOptions: AndroidOptions(encryptedSharedPreferences: true), iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock_this_device));
+        if (stored == null) {
+          // Fall back to main app Keychain
+          stored = await _secureStorage.read(key: _fallbackKey);
+        }
         if (stored == null) {
           stored = const Uuid().v4();
-          await prefs.setString(prefKey, stored);
+          // Write to both App Group (for extension access) and main Keychain
+          await _secureStorage.write(key: _fallbackKeyAppGroup, value: stored, aOptions: AndroidOptions(encryptedSharedPreferences: true), iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock_this_device));
+          await _secureStorage.write(key: _fallbackKey, value: stored);
         }
         rawId = stored;
       }

@@ -23,12 +23,39 @@ const double tauMs = 7.67 * 60 * 1000; // 460,200 ms
 // ─── Cross-Device Multiplier ─────────────────────────────────────────────────
 const double crossDeviceMultiplier = 2.2;
 
+// ─── Pickup Penalty ───────────────────────────────────────────────────────────
+const double pickupPenalty = 3.5;
+
 // ─── Normalisation Thresholds ────────────────────────────────────────────────
 /// Empirically: a very heavy day = ~500 raw debt units => 100% load
 const double dailyDebtThreshold = 500.0;
 
 /// Per-hour: a very heavy hour = ~40 raw debt units => 100%
 const double hourlyDebtThreshold = 40.0;
+
+// ─── Sync Payload Schema Version ──────────────────────────────────────────────
+/// Increment when payload structure changes in a backward-incompatible way.
+/// v1: Initial release
+/// v2: Added break_events, 5-category breakdown (tools), cross-device multiplier parity
+const int syncPayloadSchemaVersion = 2;
+
+// ─── Shared Timing Constants ──────────────────────────────────────────────────
+/// 5-minute window for velocity calculation and break detection
+const int fiveMinMs = 5 * 60 * 1000; // 300,000 ms
+/// 7-day TTL for local event storage
+const int ttlSevenDaysMs = 7 * 24 * 60 * 60 * 1000; // 604,800,000 ms
+/// Base backoff for sync retry (30 seconds)
+const int backoffBaseMs = 30 * 1000; // 30,000 ms
+/// Velocity multiplier cap at 4 switches/min
+const int velocityCapSwitchesPerMin = 4;
+
+// ─── Break Classification Thresholds ──────────────────────────────────────────
+/// Minimum break duration to track (5 minutes)
+const int minBreakMs = fiveMinMs;
+/// Structured break threshold (20 minutes)
+const int structuredBreakMin = 20;
+/// Sleep/overnight break threshold (8 hours = 480 minutes)
+const int sleepBreakMin = 480;
 
 // ─── Context Distance Matrix (Asymmetric) ────────────────────────────────────
 /// FROM category (outer key) → TO category (inner key)

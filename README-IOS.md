@@ -2,6 +2,42 @@
 
 CogniTrack on iOS is your **dashboard and manual session logger** for tracking cognitive load and focus quality. Unlike Android, iOS does not allow third-party apps to read system-wide app usage data, so CogniTrack on iOS focuses on **manual focus session logging** via the Sanctuary screen, combined with data synced from your desktop agent (macOS/Windows).
 
+> **Production Status: 🟡 CODE COMPLETE — REQUIRES XCODE CONFIGURATION** — All Dart/engine layers done. DeviceActivity + Notification Service Extensions implemented in Swift. Requires Xcode target creation + App Group provisioning (see `DEVICE_ACTIVITY_SETUP.md`). Once configured, iOS achieves full parity with Android.
+
+---
+
+## Production Readiness Summary
+
+| Area | Status | Details |
+|------|--------|---------|
+| **Cognitive Engine** | ✅ Ready | Dart port of TS engine — 100% parity |
+| **Sync Engine** | ✅ Ready | 15-min batch, offline queue, backoff |
+| **Manual Session Logging** | ✅ Ready | Sanctuary screen with distinct appIds |
+| **Device ID** | ✅ Ready | `identifierForVendor` → Keychain + App Group fallback |
+| **Break Extraction** | ✅ Ready | 5-min minimum, IDLE/STRUCTURED/SLEEP |
+| **Cross-Device Multiplier** | ✅ Ready | 2.2× on phone↔desktop switch |
+| **DeviceActivity Monitor** | 🟡 Implemented | `DeviceActivityMonitorExtension.swift` — needs Xcode target |
+| **Screen-On Detection** | 🟡 Implemented | `NotificationService.swift` — needs Xcode target |
+| **App Group Sync** | 🟡 Ready | `group.cognitrack` — needs provisioning |
+| **Family Controls** | 🟡 Required | Authorization before scheduling |
+| **Background Sync (BGAppRefresh)** | ✅ Ready | 15-min trigger in `AppDelegate.swift` |
+| **Foreground Sync** | ✅ Ready | `AppLifecycleState.resumed` observer |
+
+---
+
+## Required Xcode Configuration (Phase 5)
+
+Before iOS can achieve full automatic tracking parity with Android, complete these steps (detailed in `DEVICE_ACTIVITY_SETUP.md`):
+
+1. **Create App Group** `group.cognitrack` in Apple Developer Portal
+2. **Add Device Activity Monitor Extension** target with Family Controls capability
+3. **Add Notification Service Extension** target
+4. **Enable App Group** on all 3 targets (Runner + 2 extensions)
+5. **Download updated provisioning profiles**
+6. **Test on physical device** (simulator lacks DeviceActivity)
+
+After these steps, iOS will have full automated Screen Time tracking parity with Android.
+
 ---
 
 ## Requirements

@@ -2,6 +2,27 @@
 
 CogniTrack on Android is your **main dashboard** for visualising cognitive load, context-switch velocity, pickup counts, and recovery quality. It also runs a background tracking service that monitors your app usage throughout the day — no extra steps required once set up.
 
+> **Production Status: ✅ READY FOR PRODUCTION** — Full automatic tracking, offline sync, ProGuard/R8 configured, all critical bugs fixed.
+
+---
+
+## Production Readiness Summary
+
+| Area | Status | Details |
+|------|--------|---------|
+| **App Usage Tracking** | ✅ Ready | UsageStatsManager via ForegroundService (Kotlin) |
+| **Screen On / Pickups** | ✅ Ready | BroadcastReceiver (`ACTION_USER_PRESENT`) |
+| **Background Sync** | ✅ Ready | 15-min periodic + connectivity restore |
+| **Offline Queue** | ✅ Ready | SQLite + exponential backoff (30s→240s, 4 retries) |
+| **Device ID** | ✅ Ready | `ANDROID_ID` SHA-256 |
+| **Break Extraction** | ✅ Ready | 5-min minimum, IDLE/STRUCTURED/SLEEP |
+| **Cross-Device Multiplier** | ✅ Ready | 2.2× on phone↔desktop switch |
+| **ProGuard / R8** | ✅ Ready | `proguard-rules.pro` with keep rules |
+| **Event Buffer** | ✅ Fixed | 10K entry FIFO cap (no unbounded growth) |
+| **Query Batching** | ✅ Fixed | 4-hour chunks avoid 10s timeout |
+| **Poll Interval** | ✅ Configurable | 30s default via SharedPreferences |
+| **Launcher Exclusion** | ✅ DRY | Shared `ExcludedPackages.kt` |
+
 ---
 
 ## Requirements

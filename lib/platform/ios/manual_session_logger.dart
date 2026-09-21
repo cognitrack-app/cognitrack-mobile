@@ -22,7 +22,7 @@ class ManualSessionLogger {
     // Insert synthetic events for the session
     await store.insertEvent(RawEventInsert(
       timestamp: start,
-      appId: 'com.apple.Preferences', // Dummy app id mapped to productive
+      appId: 'manual.focus', // Distinct appId for manual focus sessions
       category: 'productive',
       eventType: 'switch',
       durationMs: durationMinutes * 60000,
@@ -38,6 +38,29 @@ class ManualSessionLogger {
     //   enum — Category.fromString('idle') falls through to Category.tools,
     //   corrupting the category breakdown. For idle events the category field
     //   is semantically irrelevant; 'productive' is used as a neutral value.
+    await store.insertEvent(RawEventInsert(
+      timestamp: end,
+      appId: 'idle',
+      category: 'productive',
+      eventType: 'idle',
+      durationMs: 0,
+      deviceType: 'phone',
+    ));
+  }
+
+  /// Log a manual break session (e.g., user-initiated break).
+  Future<void> logBreakSession(int durationMinutes) async {
+    final end = DateTime.now().millisecondsSinceEpoch;
+    final start = end - (durationMinutes * 60000);
+
+    await store.insertEvent(RawEventInsert(
+      timestamp: start,
+      appId: 'manual.break',
+      category: 'productive',
+      eventType: 'switch',
+      durationMs: durationMinutes * 60000,
+      deviceType: 'phone',
+    ));
     await store.insertEvent(RawEventInsert(
       timestamp: end,
       appId: 'idle',

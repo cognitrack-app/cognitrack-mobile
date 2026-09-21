@@ -10,6 +10,9 @@ import '../../core/cognitive_engine/app_normalizer.dart';
 class UsageStatsCollector {
   static const _channel = MethodChannel('com.cognitrack/usage_stats');
 
+  /// Maximum time range per batch query to avoid 10s timeout on slow devices.
+  static const int _maxBatchMs = 4 * 60 * 60 * 1000; // 4 hours
+
   /// Request usage stats permission — deep-links to system settings.
   /// Must be called before queryEvents().
   Future<void> requestPermission() async {
@@ -48,11 +51,33 @@ class UsageStatsCollector {
   }
 
   /// Query app usage events from [startMs] to [endMs].
+  /// Splits large time ranges into batches to avoid MethodChannel timeout.
   /// Returns a list of AppEvents with category resolved.
   Future<List<AppEvent>> queryEvents({
     required int startMs,
     required int endMs,
   }) async {
+    if (startMs >= endMs) return [];
+
+    final events = <AppEvent>[];
+    int batchStart = startMs;
+
+    while (batchStart < endMs) {
+      final batchEnd = (batchStart + _maxBatchMs < endMs)
+          ? batchStart + _maxBatchMs
+          : endMs;
+
+      final batchEvents = await _queryEventsBatch(batchStart, batchEnd);
+      events.addAll(batchEvents);
+
+      batchStart = batchEnd;
+    }
+
+    return events;
+  }
+
+  /// Query a single batch (max 4 hours) from the native plugin.
+  Future<List<AppEvent>> _queryEventsBatch(int startMs, int endMs) async {
     List<dynamic>? raw;
     try {
       raw = await _channel.invokeMethod<List<dynamic>>(
@@ -60,7 +85,7 @@ class UsageStatsCollector {
         {'startMs': startMs, 'endMs': endMs},
       ).timeout(const Duration(seconds: 10), onTimeout: () => <dynamic>[]);
     } on PlatformException catch (e) {
-      debugPrint('[UsageStatsCollector] queryEvents error: $e');
+      debugPrint('[UsageStatsCollector] queryEvents batch error: $e');
       return [];
     }
     if (raw == null || raw.isEmpty) return [];

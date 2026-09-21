@@ -31,10 +31,16 @@ import org.json.JSONObject
  *   Both are synchronized on the SharedPreferences commit — Android's
  *   SharedPreferences implementation guarantees atomic commit() on a single
  *   file, so there is no torn read/write between the two callers.
+ *
+ * Capacity management:
+ *   MAX_BUFFERED_EVENTS limits the queue size to prevent unbounded
+ *   SharedPreferences growth if the app isn't opened for days.
+ *   Oldest events are evicted first (FIFO) when the cap is reached.
  */
 object UsageEventBuffer {
-    private const val PREFS_NAME  = "cognitrack_event_buffer"
-    private const val KEY_PENDING = "pending_usage_events"
+    private const val PREFS_NAME         = "cognitrack_event_buffer"
+    private const val KEY_PENDING        = "pending_usage_events"
+    private const val MAX_BUFFERED_EVENTS = 10_000 // ~1 MB JSON; FIFO eviction when exceeded
 
     /**
      * Append [events] to the tail of the persistent queue.
@@ -51,6 +57,7 @@ object UsageEventBuffer {
         val prefs    = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val existing = prefs.getString(KEY_PENDING, "[]") ?: "[]"
         val array    = try { JSONArray(existing) } catch (_: Exception) { JSONArray() }
+
         for (e in events) {
             val obj = JSONObject()
             obj.put("packageName", e["packageName"] as? String ?: "")
@@ -59,7 +66,18 @@ object UsageEventBuffer {
             obj.put("durationMs",  e["durationMs"]  as? Long   ?: 0L)
             array.put(obj)
         }
-        prefs.edit().putString(KEY_PENDING, array.toString()).commit()
+
+        // FIFO eviction: if exceeding cap, remove oldest events from the front
+        if (array.length() > MAX_BUFFERED_EVENTS) {
+            val excess = array.length() - MAX_BUFFERED_EVENTS
+            val newArray = JSONArray()
+            for (i in excess until array.length()) {
+                newArray.put(array.get(i))
+            }
+            prefs.edit().putString(KEY_PENDING, newArray.toString()).commit()
+        } else {
+            prefs.edit().putString(KEY_PENDING, array.toString()).commit()
+        }
     }
 
     /**
