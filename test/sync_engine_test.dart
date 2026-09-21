@@ -74,13 +74,15 @@ void main() {
         switchVelocityPeak: 2.1,
         categoryBreakdown: const CategoryBreakdown(
           productive: 40,
+          tools: 5,
           entertainment: 20,
           social: 30,
-          passiveWaste: 10,
+          passiveWaste: 5,
         ),
         peakLoadHour: 14,
         hourlyLoad: List.filled(24, 0.0),
         lastUpdated: '2024-11-14T18:00:00Z',
+        schemaVersion: 2,
       );
 
       final map = payload.toFirestore();

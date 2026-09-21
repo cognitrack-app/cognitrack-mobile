@@ -3,9 +3,7 @@
 library;
 
 import 'models.dart';
-
-/// Minimum continuous idle duration to count as a trackable break (5 min).
-const int _minBreakMs = 5 * 60 * 1000;
+import 'constants.dart';
 
 /// Extracts [BreakEvent] list from a sorted day's [AppEvent] array.
 ///
@@ -43,13 +41,14 @@ List<BreakEvent> extractBreakEvents(
     }
 
     // If no subsequent switch (user went offline for the evening),
-    // fall back to current time — same logic as desktop breakExtractor.ts.
-    final endTs =
-        nextSwitch?.timestamp ?? DateTime.now().millisecondsSinceEpoch;
+    // fall back to the last event's timestamp in this day's event stream.
+    // Using DateTime.now() (sync time) would artificially inflate break
+    // duration if sync runs hours after the last event.
+    final endTs = nextSwitch?.timestamp ?? events.last.timestamp;
     final durationMs = endTs - e.timestamp;
 
     // Drop micro-pauses (< 5 min).
-    if (durationMs < _minBreakMs) continue;
+    if (durationMs < minBreakMs) continue;
 
     final startHour = DateTime.fromMillisecondsSinceEpoch(e.timestamp).hour;
     final endHour = DateTime.fromMillisecondsSinceEpoch(endTs).hour;
@@ -62,9 +61,9 @@ List<BreakEvent> extractBreakEvents(
 
     final durationMin = (durationMs / 60000).round();
 
-    final activityType = durationMin >= 480
+    final activityType = durationMin >= sleepBreakMin
         ? 'SLEEP'
-        : durationMin >= 20
+        : durationMin >= structuredBreakMin
             ? 'STRUCTURED'
             : 'IDLE';
 

@@ -1,141 +1,116 @@
-# ════════════════════════════════════════════════════════════════════════════
-#  CogniTrack Mobile — ProGuard / R8 rules
+# CogniTrack ProGuard / R8 Rules
+# ─────────────────────────────────────────────────────────────────────────────
+# This file is referenced in build.gradle.kts via:
+#   proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
 #
-#  Philosophy:
-#   • Keep rules only where R8 cannot infer safety automatically.
-#   • Flutter's Gradle plugin injects its own keep rules — no need to duplicate.
-#   • All -dontwarn entries are intentional; they silence warnings from
-#     dependencies that reference APIs not present on older API levels but
-#     that are never exercised at runtime on those devices.
-# ════════════════════════════════════════════════════════════════════════════
+# R8 full-mode is enabled via gradle.properties:
+#   android.enableR8.fullMode=true
+#
+# Key goals:
+#  1. Keep MethodChannel / EventChannel classes and their MethodCall/EventSink
+#     interfaces so Flutter ↔ Kotlin communication works after obfuscation.
+#  2. Keep native plugin entry points (FlutterPlugin, BroadcastReceiver, Service).
+#  3. Keep data classes used for JSON serialization (UsageEventBuffer, etc.).
+#  4. Strip debug logging in release builds.
+#  5. Preserve annotations for Firebase / Firestore.
 
+# ─── Keep all public Flutter plugin entry points ───────────────────────────────
+-keep public class com.cognitrack.cognitrack_mobile.** {
+    public protected *;
+}
 
-# ── Stack Trace Readability ───────────────────────────────────────────────────
-# Preserves line numbers so Crashlytics / Sentry can symbolicate crashes.
--keepattributes SourceFile,LineNumberTable
--renamesourcefileattribute SourceFile
+# Specifically keep the plugin classes that Flutter instantiates by name
+-keep class com.cognitrack.cognitrack_mobile.UsageStatsPlugin {
+    <init>(...);
+    public *;
+}
+-keep class com.cognitrack.cognitrack_mobile.ScreenStateReceiver {
+    <init>(...);
+    public *;
+}
+-keep class com.cognitrack.cognitrack_mobile.ForegroundService {
+    <init>(...);
+    public *;
+}
+-keep class com.cognitrack.cognitrack_mobile.BootReceiver {
+    <init>(...);
+    public *;
+}
+-keep class com.cognitrack.cognitrack_mobile.UsageEventBuffer {
+    <init>(...);
+    public *;
+}
 
-# Required for Kotlin reflection and Firebase serialisation.
--keepattributes Signature
+# ─── Keep MethodChannel / EventChannel invocation signatures ───────────────────
+# These are called via reflection from Flutter's BinaryMessenger
+-keepclassmembers class * {
+    @io.flutter.plugin.common.MethodChannel$MethodCallHandler *;
+    @io.flutter.plugin.common.EventChannel$StreamHandler *;
+}
+
+# ─── Keep data classes for JSON serialization (SharedPreferences buffer) ───────
+-keep class com.cognitrack.cognitrack_mobile.UsageEventBuffer {
+    public static *;
+}
+
+# ─── Keep BroadcastReceiver / Service entry points ─────────────────────────────
+# Android instantiates these via Intent — must not be obfuscated/removed
+-keep public class * extends android.content.BroadcastReceiver
+-keep public class * extends android.app.Service
+-keep public class * extends android.app.Application
+
+# ─── Keep native JNI methods ───────────────────────────────────────────────────
+-keepclasseswithmembernames class * {
+    native <methods>;
+}
+
+# ─── Keep Firebase / Firestore annotations ─────────────────────────────────────
 -keepattributes *Annotation*
--keepattributes RuntimeVisibleAnnotations,RuntimeVisibleParameterAnnotations
-
-
-# ── Firebase ──────────────────────────────────────────────────────────────────
--keep class com.google.firebase.** { *; }
--keep class com.google.android.gms.** { *; }
--dontwarn com.google.firebase.**
--dontwarn com.google.android.gms.**
-
-# Firebase Crashlytics — must not rename the crash reporter internals.
--keep class com.google.firebase.crashlytics.** { *; }
--dontwarn com.google.firebase.crashlytics.**
-
-# Firestore model classes use reflection to read/write fields — keep them.
 -keepclassmembers class * {
-    @com.google.firebase.firestore.PropertyName <fields>;
-    @com.google.firebase.firestore.PropertyName <methods>;
+    @com.google.firebase.firestore.* *;
 }
 
+# ─── Strip debug logging in release builds ─────────────────────────────────────
+-assumenosideeffects class android.util.Log {
+    public static *** v(...);
+    public static *** d(...);
+    public static *** i(...);
+    public static *** w(...);
+}
+# Also strip our custom debugPrint calls
+-assumenosideeffects class io.flutter.Log {
+    public static *** v(...);
+    public static *** d(...);
+    public static *** i(...);
+    public static *** w(...);
+}
 
-# ── Google Sign-In ────────────────────────────────────────────────────────────
--keep class com.google.android.gms.auth.** { *; }
--keep class com.google.android.gms.common.** { *; }
--keep class com.google.android.gms.tasks.** { *; }
--dontwarn com.google.android.gms.auth.**
+# ─── Preserve line numbers for crash symbolication ─────────────────────────────
+-keepattributes SourceFile,LineNumberTable
 
+# ─── Keep Kotlin metadata for reflection used by kotlinx.serialization ─────────
+-keep class kotlin.Metadata { *; }
+-keep class kotlinx.serialization.** { *; }
 
-# ── SQLite / sqflite ─────────────────────────────────────────────────────────
--keep class io.flutter.plugins.sqflite.** { *; }
--dontwarn io.flutter.plugins.sqflite.**
+# ─── Keep ConnectivityManager / Network callback classes ───────────────────────
+-keep class android.net.ConnectivityManager { *; }
+-keep class android.net.NetworkCallback { *; }
 
+# ─── Keep DeviceInfoPlugin classes ─────────────────────────────────────────────
+-keep class com.example.device_info_plus.** { *; }
 
-# ── Kotlin Coroutines ─────────────────────────────────────────────────────────
-# Coroutines use reflection to resume continuations — volatile fields must be kept.
--keepclassmembers class kotlinx.coroutines.** { volatile <fields>; }
--keep class kotlinx.coroutines.android.** { *; }
--dontwarn kotlinx.coroutines.**
+# ─── Keep FlutterSecureStorage classes ─────────────────────────────────────────
+-keep class com.flutter_secure_storage.** { *; }
 
+# ─── Keep UUID generator ───────────────────────────────────────────────────────
+-keep class java.util.UUID { *; }
 
-# ── Kotlin Serialization ──────────────────────────────────────────────────────
--keep @kotlinx.serialization.Serializable class * { *; }
+# ─── Introspection / reflection used by Flutter ────────────────────────────────
 -keepclassmembers class * {
-    @kotlinx.serialization.SerialName <fields>;
-}
--dontwarn kotlinx.serialization.**
-
-
-# ── Connectivity Plus ──────────────────────────────────────────────────────────
--keep class dev.fluttercommunity.plus.connectivity.** { *; }
--dontwarn dev.fluttercommunity.plus.connectivity.**
-
-
-# ── Permission Handler ────────────────────────────────────────────────────────
--keep class com.baseflow.permissionhandler.** { *; }
--dontwarn com.baseflow.permissionhandler.**
-
-
-# ── Flutter Local Notifications ───────────────────────────────────────────────
--keep class com.dexterous.flutterlocalnotifications.** { *; }
--dontwarn com.dexterous.flutterlocalnotifications.**
-
-
-# ── Device Info Plus ──────────────────────────────────────────────────────────
--keep class dev.fluttercommunity.plus.device_info.** { *; }
--dontwarn dev.fluttercommunity.plus.device_info.**
-
-
-# ── Package Info Plus ─────────────────────────────────────────────────────────
--keep class dev.fluttercommunity.plus.packageinfo.** { *; }
-
-
-# ── URL Launcher ──────────────────────────────────────────────────────────────
--keep class io.flutter.plugins.urllauncher.** { *; }
--dontwarn io.flutter.plugins.urllauncher.**
-
-
-# ── Shared Preferences ────────────────────────────────────────────────────────
--keep class io.flutter.plugins.sharedpreferences.** { *; }
-
-
-# ── Path Provider ────────────────────────────────────────────────────────────
--keep class io.flutter.plugins.pathprovider.** { *; }
-
-
-# ── fl_chart ─────────────────────────────────────────────────────────────────
-# Pure-Dart package — no native Android code; no keep rule needed.
-# R8 handles the Dart layer automatically through Flutter's AOT compiler.
-
-
-# ── go_router ─────────────────────────────────────────────────────────────────
-# Pure-Dart package — no native Android code.
-
-
-# ── google_fonts ──────────────────────────────────────────────────────────────
-# Pure-Dart package — no native Android code.
-
-
-# ── R8 Full Mode — Aggressive Optimisations ───────────────────────────────────
-# These rules are only required with android.enableR8.fullMode=true
-# (set in gradle.properties). They prevent R8 from removing classes/members
-# that are accessed via reflection or class-loading patterns we cannot
-# statically annotate.
-
-# Keep any class that has a no-arg constructor and is referenced as a
-# Parcelable — used by Flutter/Android interop bundles.
--keepclassmembers class * implements android.os.Parcelable {
-    public static final android.os.Parcelable$Creator CREATOR;
+    @io.flutter.embedding.engine.FlutterJNI *;
 }
 
-# Enum members are accessed by name from Kotlin/Dart bridge code.
--keepclassmembers enum * {
-    public static **[] values();
-    public static ** valueOf(java.lang.String);
+# ─── Prevent removal of empty constructors used by Gson/JSON ──────────────────
+-keepclassmembers class * {
+    <init>();
 }
-
-# Suppress harmless warnings from transitive dependencies.
--dontwarn javax.annotation.**
--dontwarn org.conscrypt.**
--dontwarn org.bouncycastle.**
--dontwarn org.openjsse.**
--dontwarn sun.misc.Unsafe

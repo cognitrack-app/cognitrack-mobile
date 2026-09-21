@@ -6,6 +6,7 @@ import 'dart:convert';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import '../cognitive_engine/models.dart';
+import '../cognitive_engine/constants.dart';
 
 // ─── Row types ───────────────────────────────────────────────────────────────
 
@@ -156,7 +157,6 @@ class PendingSyncRow {
 class SQLiteStore {
   final String _dbName;
   static const _dbVersion = 1;
-  static const _sevenDaysMs = 604800000; // 7 * 24 * 60 * 60 * 1000
 
   Database? _db;
   Future<Database>? _opening;
@@ -195,11 +195,12 @@ class SQLiteStore {
       },
       onOpen: (db) async {
         // TTL cleanup: delete events older than 7 days. Safe here (no PRAGMAs).
+        // ttlSevenDaysMs = 604800000 ms (defined in @cognitrack/shared)
         await db.delete(
           'app_events',
           where: 'timestamp < ?',
           whereArgs: [
-            DateTime.now().millisecondsSinceEpoch - _sevenDaysMs,
+            DateTime.now().millisecondsSinceEpoch - ttlSevenDaysMs,
           ],
         );
       },
@@ -408,6 +409,16 @@ class SQLiteStore {
       'pending_sync',
       where: 'nextRetryAt <= ?',
       whereArgs: [now],
+      orderBy: 'nextRetryAt ASC',
+    );
+    return rows.map(PendingSyncRow.fromMap).toList();
+  }
+
+  /// Fetch all pending syncs (for metrics/observability).
+  Future<List<PendingSyncRow>> getAllPendingSyncs() async {
+    final db = await _database;
+    final rows = await db.query(
+      'pending_sync',
       orderBy: 'nextRetryAt ASC',
     );
     return rows.map(PendingSyncRow.fromMap).toList();

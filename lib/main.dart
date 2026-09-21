@@ -15,6 +15,7 @@ import 'core/sync/sync_engine.dart';
 import 'platform/android/usage_stats_collector.dart';
 import 'dart:io' as io;
 import 'platform/ios/manual_session_logger.dart';
+import 'platform/ios/background_sync.dart'; // NEW: iOS BGAppRefresh handler
 import 'package:shared_preferences/shared_preferences.dart';
 import 'app.dart';
 import 'firebase_options.dart';
@@ -63,6 +64,11 @@ Future<void> main() async {
 
   // Start 15-minute sync timer after the auth listener is wired up.
   syncEngine.start();
+
+  // Initialize iOS background sync handler (BGAppRefresh)
+  if (io.Platform.isIOS) {
+    IOSBackgroundSync.initialize(syncEngine);
+  }
 
   // AUTO-SEED: In debug builds, automatically seed 14 days of mock data on
   // every cold start so the UI is never empty during development or demos.

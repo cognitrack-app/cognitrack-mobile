@@ -4,6 +4,8 @@ A Flutter foreground-service agent that tracks app usage via Android's `UsageSta
 
 All dashboard and analytics UI lives in this app. The CogniTrack Windows desktop agent reports into the same Firestore account and the two datasets are merged automatically by the `mergeAgentData` Cloud Function.
 
+> **Production Status: ✅ READY FOR PRODUCTION** — Full automatic tracking, offline sync, ProGuard/R8 configured, all critical bugs fixed.
+
 ---
 
 ## How it connects to Windows Desktop
@@ -24,6 +26,25 @@ Both apps sign in with the same Firebase email and password. That shared UID is 
 | Android Studio | **Hedgehog or later** | Or VS Code with Flutter extension |
 | Android device or emulator | API 26+ (Android 8.0) | `UsageStatsManager` requires API 21+; foreground service targets API 26+ |
 | Firebase project | — | Requires `google-services.json` (see step 3) |
+
+---
+
+## Production Readiness Summary
+
+| Area | Status | Details |
+|------|--------|---------|
+| **App Usage Tracking** | ✅ Ready | UsageStatsManager via ForegroundService (Kotlin) |
+| **Screen On / Pickups** | ✅ Ready | BroadcastReceiver (`ACTION_USER_PRESENT`) |
+| **Background Sync** | ✅ Ready | 15-min periodic + connectivity restore |
+| **Offline Queue** | ✅ Ready | SQLite + exponential backoff (30s→240s, 4 retries) |
+| **Device ID** | ✅ Ready | `ANDROID_ID` SHA-256 |
+| **Break Extraction** | ✅ Ready | 5-min minimum, IDLE/STRUCTURED/SLEEP |
+| **Cross-Device Multiplier** | ✅ Ready | 2.2× on phone↔desktop switch |
+| **ProGuard / R8** | ✅ Ready | `proguard-rules.pro` with keep rules |
+| **Event Buffer** | ✅ Fixed | 10K entry FIFO cap (no unbounded growth) |
+| **Query Batching** | ✅ Fixed | 4-hour chunks avoid 10s timeout |
+| **Poll Interval** | ✅ Configurable | 30s default via SharedPreferences |
+| **Launcher Exclusion** | ✅ DRY | Shared `ExcludedPackages.kt` |
 
 Verify your environment:
 

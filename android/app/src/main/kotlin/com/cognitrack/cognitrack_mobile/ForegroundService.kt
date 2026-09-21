@@ -9,6 +9,8 @@ import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
@@ -52,23 +54,6 @@ class ForegroundService : Service() {
         const  val ACTION_START             = "com.cognitrack.START_TRACKING"
         const  val ACTION_STOP              = "com.cognitrack.STOP_TRACKING"
 
-        /** Launcher and system packages to exclude — same set as UsageStatsPlugin. */
-        private val EXCLUDED_PACKAGES = setOf(
-            "com.android.launcher",
-            "com.android.launcher3",
-            "com.google.android.apps.nexuslauncher",
-            "com.sec.android.app.launcher",
-            "com.samsung.android.app.spage",
-            "com.miui.home",
-            "com.oneplus.launcher",
-            "com.oppo.launcher",
-            "net.one.punch.launcher",
-            "com.huawei.android.launcher",
-            "com.hihonor.android.launcher",
-            "com.asus.launcher",
-            "com.lge.launcher3",
-        )
-
         fun start(context: Context) {
             val intent = Intent(context, ForegroundService::class.java).apply {
                 action = ACTION_START
@@ -109,9 +94,14 @@ class ForegroundService : Service() {
             else -> {
                 // BUG-4 FIX: startForeground() is the FIRST thing called in
                 // onStartCommand(), synchronously, before any I/O or coroutine
-                // launch. The specialUse 10-second deadline is met on every
-                // device because no heavy initialization precedes this call.
-                startForeground(NOTIFICATION_ID, buildNotification())
+                // launch. The 10-second deadline is met on every device because
+                // no heavy initialization precedes this call.
+                // Android 14+ requires foreground service type for dataSync.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    startForeground(NOTIFICATION_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+                } else {
+                    startForeground(NOTIFICATION_ID, buildNotification())
+                }
                 if (!isPolling) {
                     isPolling = true
                     startPollingLoop()
@@ -140,8 +130,14 @@ class ForegroundService : Service() {
      *
      * No MethodChannel, no FlutterEngine, no Dart isolate, no SQLite.
      */
+    /** Poll interval in milliseconds. Default 30s; can be configured via SharedPreferences. */
+    private val pollIntervalMs: Long by lazy {
+        val prefs = applicationContext.getSharedPreferences("cognitrack_service_config", Context.MODE_PRIVATE)
+        prefs.getLong("poll_interval_ms", 30_000L) // Default 30 seconds
+    }
+
     private fun startPollingLoop() {
-        var lastQueriedEndMs = System.currentTimeMillis() - 60_000L
+        var lastQueriedEndMs = System.currentTimeMillis() - pollIntervalMs
         serviceScope.launch {
             while (isActive && isPolling) {
                 val endMs   = System.currentTimeMillis()
@@ -153,7 +149,7 @@ class ForegroundService : Service() {
                     // Buffer into SharedPreferences for MainActivity to drain
                     UsageEventBuffer.append(applicationContext, events)
                 }
-                delay(60_000L)
+                delay(pollIntervalMs)
             }
         }
     }
@@ -179,7 +175,7 @@ class ForegroundService : Service() {
         while (usageEvents.hasNextEvent()) {
             usageEvents.getNextEvent(event)
             val pkg = event.packageName ?: continue
-            if (pkg in EXCLUDED_PACKAGES || pkg == packageName) continue
+            if (ExcludedPackages.isExcluded(pkg, packageName)) continue
 
             when (event.eventType) {
                 UsageEvents.Event.MOVE_TO_FOREGROUND -> {

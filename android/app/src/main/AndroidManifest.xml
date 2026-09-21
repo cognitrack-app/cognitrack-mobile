@@ -10,7 +10,7 @@
 
     <!-- FOREGROUND_SERVICE: required for Android 8+ background tracking -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <!-- POST_NOTIFICATIONS: for persistent tracking notification (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -53,8 +53,7 @@
         <service
             android:name=".ForegroundService"
             android:exported="false"
-            android:foregroundServiceType="specialUse">
-            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Cognitive Load Tracking" />
+            android:foregroundServiceType="dataSync">
         </service>
 
         <!-- ── Meta-data for Flutter engine ─────────────────────────── -->

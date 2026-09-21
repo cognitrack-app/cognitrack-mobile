@@ -114,28 +114,6 @@ class UsageStatsPlugin : FlutterPlugin, MethodCallHandler {
      * MOVE_TO_BACKGROUND (2) → "idle".
      * Pickup detection is handled by ScreenStateReceiver separately.
      */
-    // Launcher packages to exclude — pressing Home fires MOVE_TO_FOREGROUND
-    // for the active launcher, which would count as a context switch to 'tools'
-    // and inflate switch counts on every device. This set covers all major OEMs.
-    private val launcherPackages by lazy {
-        setOf(
-            "com.android.launcher",              // AOSP generic
-            "com.android.launcher3",             // AOSP Launcher3
-            "com.google.android.apps.nexuslauncher", // Pixel 6+
-            "com.sec.android.app.launcher",      // Samsung One UI
-            "com.samsung.android.app.spage",     // Samsung Bixby Home
-            "com.miui.home",                     // Xiaomi MIUI
-            "com.oneplus.launcher",              // OnePlus OxygenOS
-            "com.oppo.launcher",                 // Oppo ColorOS
-            "net.one.punch.launcher",            // Realme
-            "com.huawei.android.launcher",       // Huawei EMUI
-            "com.hihonor.android.launcher",      // Honor
-            "com.asus.launcher",                 // ASUS ZenUI
-            "com.lge.launcher3",                 // LG UX
-            context.packageName                  // CogniTrack itself
-        )
-    }
-
     private fun queryUsageEvents(startMs: Long, endMs: Long): List<Map<String, Any>> {
         val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
         val events = usm.queryEvents(startMs, endMs)
@@ -148,8 +126,8 @@ class UsageStatsPlugin : FlutterPlugin, MethodCallHandler {
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
             val pkg = event.packageName ?: continue
-            // Skip launchers and CogniTrack itself — all entries are in launcherPackages
-            if (pkg in launcherPackages) continue
+            // Skip launchers and CogniTrack itself — use shared ExcludedPackages
+            if (ExcludedPackages.isExcluded(pkg, context.packageName)) continue
 
             when (event.eventType) {
                 UsageEvents.Event.MOVE_TO_FOREGROUND -> {
