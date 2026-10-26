@@ -43,6 +43,66 @@ object UsageEventBuffer {
     private const val MAX_BUFFERED_EVENTS = 10_000 // ~1 MB JSON; FIFO eviction when exceeded
 
     /**
+     * Append a sync-trigger marker so the Dart side knows to call syncNow()
+     * on next event insert or app resume. The marker is a synthetic event
+     * with eventType "sync_trigger" that UsageStatsPlugin.drain() forwards
+     * to Dart via MethodChannel.
+     */
+    fun appendSyncTrigger(context: Context) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val existing = prefs.getString(KEY_PENDING, "[]") ?: "[]"
+        val array = try { JSONArray(existing) } catch (_: Exception) { JSONArray() }
+
+        val obj = JSONObject()
+        obj.put("packageName", "cognitrack_sync_trigger")
+        obj.put("timestamp", System.currentTimeMillis())
+        obj.put("eventType", "sync_trigger")
+        obj.put("durationMs", 0L)
+        array.put(obj)
+
+        prefs.edit().putString(KEY_PENDING, array.toString()).commit()
+    }
+
+    /**
+     * Returns true if there is a pending sync_trigger marker in the buffer.
+     */
+    fun hasSyncTrigger(context: Context): Boolean {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val raw = prefs.getString(KEY_PENDING, "[]") ?: "[]"
+        return try {
+            val array = JSONArray(raw)
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                if (obj.optString("eventType") == "sync_trigger") return true
+            }
+            false
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Remove all sync_trigger markers from the buffer.
+     */
+    fun drainSyncTrigger(context: Context) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val raw = prefs.getString(KEY_PENDING, "[]") ?: "[]"
+        try {
+            val array = JSONArray(raw)
+            val newArray = JSONArray()
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                if (obj.optString("eventType") != "sync_trigger") {
+                    newArray.put(obj)
+                }
+            }
+            prefs.edit().putString(KEY_PENDING, newArray.toString()).commit()
+        } catch (_: Exception) {
+            // ignore corrupt data
+        }
+    }
+
+    /**
      * Append [events] to the tail of the persistent queue.
      * Each element must be a Map<String, Any> compatible with
      * UsageStatsPlugin.queryUsageEvents() return format:

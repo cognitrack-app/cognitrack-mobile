@@ -50,6 +50,10 @@ Future<void> main() async {
   final firestoreClient = FirestoreClient();
   final syncEngine = SyncEngine(store: store, client: firestoreClient);
 
+  // Wire event-triggered debounced sync: every event insert triggers a
+  // debounced syncNow() (10s debounce, 30s max wait).
+  store.onEventInserted = syncEngine.triggerDebouncedSync;
+
   // BUG-14: register auth listener BEFORE start() so the connectivity-restore
   // path inside start() cannot fire _flushPendingQueue() before device
   // registration has been attempted.

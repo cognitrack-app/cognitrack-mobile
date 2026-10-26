@@ -35,6 +35,9 @@ dependencies:
   # ── Notifications ───────────────────────────────────────────────────────────
   flutter_local_notifications: ^18.0.1
 
+  # ── Background Sync ────────────────────────────────────────────────────────
+  workmanager: ^0.10.10
+
   # ── UI Layer (Phase 4) ──────────────────────────────────────────────────────
   go_router: ^14.0.0
   fl_chart: ^0.69.0

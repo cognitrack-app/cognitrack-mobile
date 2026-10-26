@@ -125,8 +125,14 @@ class UsageStatsCollector {
         for (final item in raw) {
           final m = Map<String, dynamic>.from(item as Map);
           final packageName = m['packageName'] as String? ?? '';
-          final timestamp = m['timestamp'] as int? ?? 0;
           final eventType = m['eventType'] as String? ?? 'switch';
+
+          // Skip internal sync-trigger markers written by Android Worker
+          if (eventType == 'sync_trigger' || packageName == 'cognitrack_sync_trigger') {
+            continue;
+          }
+
+          final timestamp = m['timestamp'] as int? ?? 0;
           final durationMs = m['durationMs'] as int? ?? 0;
 
           final appId = normalizeAppId(packageName, Platform.android);

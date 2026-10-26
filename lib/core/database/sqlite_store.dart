@@ -3,6 +3,7 @@
 library;
 
 import 'dart:convert';
+import 'dart:math';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import '../cognitive_engine/models.dart';
@@ -114,34 +115,34 @@ class DailyMetricsRow {
 }
 
 class PendingSyncRow {
-  final int? id;
-  final String date;
+  final String date; // Composite primary key - one row per user per day
   final String payload; // JSON PhoneSyncPayload
   final int retryCount;
-  final int nextRetryAt;
+  final int nextRetryAt; // Unix ms, exponential backoff cap at 1hr, max 20 retries
+  final String status; // pending/synced/failed
 
   const PendingSyncRow({
-    this.id,
     required this.date,
     required this.payload,
     required this.retryCount,
     required this.nextRetryAt,
+    required this.status,
   });
 
   factory PendingSyncRow.fromMap(Map<String, dynamic> m) => PendingSyncRow(
-        id: m['id'] as int?,
         date: m['date'] as String,
         payload: m['payload'] as String,
         retryCount: m['retryCount'] as int,
         nextRetryAt: m['nextRetryAt'] as int,
+        status: m['status'] as String,
       );
 
   Map<String, dynamic> toMap() => {
-        if (id != null) 'id': id,
         'date': date,
         'payload': payload,
         'retryCount': retryCount,
         'nextRetryAt': nextRetryAt,
+        'status': status,
       };
 }
 
@@ -153,7 +154,7 @@ class PendingSyncRow {
 /// Tables:
 ///   app_events       — raw tracking events; 7-day TTL
 ///   daily_metrics    — computed 11-scalar summaries ready for Firestore sync
-///   pending_sync     — offline queue with exponential backoff
+///   pending_sync     — offline sync queue with composite PK (date), exponential backoff, max 20 retries, no deletion on exhaustion
 class SQLiteStore {
   final String _dbName;
   static const _dbVersion = 1;
@@ -162,6 +163,8 @@ class SQLiteStore {
   Future<Database>? _opening;
 
   SQLiteStore({String dbName = 'cognitrack.db'}) : _dbName = dbName;
+
+  VoidCallback? onEventInserted;
 
   /// Async-safe singleton: if two callers race, both await the same Future
   /// instead of calling _open() twice. The second open attempt was triggering
@@ -185,7 +188,7 @@ class SQLiteStore {
       onCreate: _onCreate,
       // onConfigure fires BEFORE onCreate/onUpgrade and outside any transaction,
       // which is the ONLY safe place to run PRAGMA statements in sqflite.
-      // Running PRAGMA journal_mode=WAL inside onOpen or onCreate throws:
+      // Running PRAGMA journal_mode=WAL inside onCreate or onOpen throws:
       // "Queries can be performed using SQLiteDatabase query or rawQuery methods only"
       // because those callbacks run inside a write transaction on newer sqflite.
       onConfigure: (db) async {
@@ -251,14 +254,18 @@ class SQLiteStore {
         ON daily_metrics(date DESC)
     ''');
 
-    // ── Offline sync queue with backoff ──────────────────────────────────────
+    // ── Offline sync queue with composite PK (date) and backoff ──────────────
+    // ENG-12: One row per user per day (upsert on composite key userId, date).
+    // No auto-increment id — uses date as composite key since mobile has single user.
+    // Exponential backoff: base 1s, max 1hr, max 20 retries.
+    // Does NOT delete on max retries exceeded — retains in 'failed' state for manual recovery.
     await db.execute('''
       CREATE TABLE IF NOT EXISTS pending_sync (
-        id          INTEGER PRIMARY KEY AUTOINCREMENT,
-        date        TEXT    NOT NULL,
-        payload     TEXT    NOT NULL,
-        retryCount  INTEGER NOT NULL DEFAULT 0,
-        nextRetryAt INTEGER NOT NULL
+        date          TEXT    PRIMARY KEY,          -- one row per user per date
+        payload       TEXT    NOT NULL,             -- JSON PhoneSyncPayload
+        retryCount    INTEGER NOT NULL DEFAULT 0,   -- exponential backoff counter
+        nextRetryAt   INTEGER NOT NULL,           -- Unix ms, backoff cap at 1hr
+        status        TEXT    NOT NULL DEFAULT 'pending' -- pending/synced/failed
       )
     ''');
   }
@@ -270,6 +277,7 @@ class SQLiteStore {
   Future<void> insertEvent(RawEventInsert event) async {
     final db = await _database;
     await db.insert('app_events', event.toMap());
+    onEventInserted?.call();
   }
 
   /// Fetch all raw events for a given date (local midnight → next midnight).
@@ -329,9 +337,10 @@ class SQLiteStore {
   // ── Daily Metrics ──────────────────────────────────────────────────────────
 
   /// Upsert computed daily metrics for a given date.
+  /// Uses INSERT OR REPLACE on date (composite key) — one row per user per day.
   /// Preserves the caller-supplied [synced] value — the mock seeder sets
-  /// synced=1 so the 15-min SyncEngine timer does NOT overwrite historical
-  /// rows with empty recomputed values on the next tick.
+  /// synced=1 so the sync engine does NOT overwrite historical rows with empty
+  /// recomputed values on the next tick.
   Future<void> upsertDailyMetrics(DailyMetricsRow metrics) async {
     final db = await _database;
     await db.insert(
@@ -396,9 +405,16 @@ class SQLiteStore {
   // ── Pending Sync Queue ─────────────────────────────────────────────────────
 
   /// Enqueue a sync payload for retry.
+  /// Uses INSERT OR REPLACE on date (composite key) — one row per user per day.
+  /// If an entry already exists for this date, replaces the payload while
+  /// preserving retryCount and nextRetryAt backoff schedule.
   Future<void> enqueuePendingSync(PendingSyncRow row) async {
     final db = await _database;
-    await db.insert('pending_sync', row.toMap());
+    await db.insert(
+      'pending_sync',
+      row.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
   }
 
   /// Fetch all pending syncs ready to retry (nextRetryAt <= now).
@@ -407,8 +423,8 @@ class SQLiteStore {
     final now = DateTime.now().millisecondsSinceEpoch;
     final rows = await db.query(
       'pending_sync',
-      where: 'nextRetryAt <= ?',
-      whereArgs: [now],
+      where: 'nextRetryAt <= ? AND status = ?',
+      whereArgs: [now, 'pending'],
       orderBy: 'nextRetryAt ASC',
     );
     return rows.map(PendingSyncRow.fromMap).toList();
@@ -437,26 +453,39 @@ class SQLiteStore {
   }
 
   /// Remove a pending sync entry after successful delivery.
-  Future<void> deletePendingSync(int id) async {
+  Future<void> deletePendingSync(String date) async {
     final db = await _database;
-    await db.delete('pending_sync', where: 'id = ?', whereArgs: [id]);
+    await db.delete('pending_sync', where: 'date = ?', whereArgs: [date]);
   }
 
   /// Update retry count and next retry time for a failed sync.
-  Future<void> updatePendingSyncRetry(int id, int retryCount,
+  /// ENG-03, ENG-04: Exponential backoff capped at max 1hr, max 20 retries.
+  /// Does NOT delete on max retries exceeded — retains in 'failed' state for manual recovery.
+  Future<void> updatePendingSyncRetry(String date, int retryCount,
       {int? nextRetryAt}) async {
     final db = await _database;
-    final delay = nextRetryAt ??
-        (DateTime.now().millisecondsSinceEpoch +
-            30000 * (1 << (retryCount - 1)));
+    // Exponential backoff: base 1s, max 1hr (3_600_000ms), max 20 retries
+    const baseBackoffMs = 1_000;
+    const maxBackoffMs = 3_600_000;
+    const maxRetries = 20;
+
+    // Calculate backoff: base * 2^(retryCount-1), capped at maxBackoffMs
+    final backoffMs = math.min(baseBackoffMs * math.pow(2, retryCount - 1), maxBackoffMs);
+    final calculatedNextRetryAt = nextRetryAt ?? DateTime.now().millisecondsSinceEpoch + backoffMs;
+
+    // Clamp to max 1hr backoff max
+    final clampedNextRetryAt = math.min(calculatedNextRetryAt, DateTime.now().millisecondsSinceEpoch + maxBackoffMs);
+
     await db.update(
       'pending_sync',
       {
         'retryCount': retryCount,
-        'nextRetryAt': nextRetryAt ?? delay,
+        'nextRetryAt': clampedNextRetryAt,
+        // If retryCount exceeds max, keep status as 'failed' for manual recovery
+        if (retryCount >= maxRetries) 'status': 'failed',
       },
-      where: 'id = ?',
-      whereArgs: [id],
+      where: 'date = ?',
+      whereArgs: [date],
     );
   }
 
@@ -465,13 +494,13 @@ class SQLiteStore {
   /// schedule. Called by _enqueuePendingSync() when the device stays offline
   /// across multiple 15-min sync cycles so the final reconnect push sends
   /// end-of-day data rather than the stale 09:00 snapshot.
-  Future<void> updatePendingSyncPayload(int id, String payload) async {
+  Future<void> updatePendingSyncPayload(String date, String payload) async {
     final db = await _database;
     await db.update(
       'pending_sync',
       {'payload': payload},
-      where: 'id = ?',
-      whereArgs: [id],
+      where: 'date = ?',
+      whereArgs: [date],
     );
   }
 
