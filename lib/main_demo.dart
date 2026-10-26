@@ -50,6 +50,10 @@ Future<void> main() async {
     isDemo: kIsDemo, // ← SyncEngine skips all Firestore writes in demo mode
   );
 
+  // Wire event-triggered debounced sync: every event insert triggers a
+  // debounced syncNow() (10s debounce, 30s max wait).
+  store.onEventInserted = syncEngine.triggerDebouncedSync;
+
   FirebaseAuth.instance.authStateChanges().listen((user) {
     if (user != null) {
       // Still register device so sign-in flow works, but no data writes.

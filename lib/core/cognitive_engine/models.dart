@@ -210,6 +210,8 @@ class PhoneSyncPayload {
   final int peakLoadHour; // 0–23
   final List<double> hourlyLoad; // 24-element 0–100
   final String lastUpdated; // ISO timestamp
+  // ENG-09: IANA timezone for cross-platform hourly bucket alignment.
+  final String timezone;
   // CRITICAL-1 FIX: break_events was missing. Cloud Function now receives
   // phone break data for recovery radar and verified break minutes.
   final List<BreakEvent> breakEvents;
@@ -231,6 +233,7 @@ class PhoneSyncPayload {
     required this.peakLoadHour,
     required this.hourlyLoad,
     required this.lastUpdated,
+    required this.timezone,
     this.breakEvents = const [],
     required this.schemaVersion,
   });
@@ -240,6 +243,8 @@ class PhoneSyncPayload {
         'deviceId': deviceId,
         'agentType': 'phone',
         'platform': platform,
+        // ENG-09: IANA timezone for hourly bucket alignment
+        'timezone': timezone,
         'cognitiveDebt': cognitiveDebt,
         'cognitiveLoadPct': cognitiveLoadPct,
         'wmCapacityRemaining': wmCapacityRemaining,

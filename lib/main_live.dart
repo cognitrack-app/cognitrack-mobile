@@ -55,6 +55,10 @@ Future<void> main() async {
     isDemo: kIsDemo, // false → full Firestore writes enabled
   );
 
+  // Wire event-triggered debounced sync: every event insert triggers a
+  // debounced syncNow() (10s debounce, 30s max wait).
+  store.onEventInserted = syncEngine.triggerDebouncedSync;
+
   // BUG-14: register auth listener BEFORE start() so device registration
   // happens before connectivity-restore can fire _flushPendingQueue().
   FirebaseAuth.instance.authStateChanges().listen((user) {

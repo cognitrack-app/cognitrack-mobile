@@ -1,12 +1,12 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <!-- ── Permissions ──────────────────────────────────────────────────── -->
     <!-- PACKAGE_USAGE_STATS: required for UsageStatsManager.queryEvents()
          Cannot be granted at runtime — user must go to Settings manually.
          We deep-link to Settings.ACTION_USAGE_ACCESS_SETTINGS. -->
     <uses-permission
         android:name="android.permission.PACKAGE_USAGE_STATS"
-        tools:ignore="ProtectedPermissions"
-        xmlns:tools="http://schemas.android.com/tools" />
+        tools:ignore="ProtectedPermissions" />
 
     <!-- FOREGROUND_SERVICE: required for Android 8+ background tracking -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -21,8 +21,9 @@
 
     <!-- RECEIVE_BOOT_COMPLETED: restart ForegroundService after device reboot -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
-
+    <!-- REQUEST_IGNORE_BATTERY_OPTIMIZATIONS removed — Google Play restricts this.
+         ForegroundService uses startForeground() to stay alive; battery exemptions
+         require Play Console justification. Add back only if justified. -->
     <application
         android:label="CogniTrack"
         android:name="${applicationName}"
@@ -54,12 +55,28 @@
             android:name=".ForegroundService"
             android:exported="false"
             android:foregroundServiceType="dataSync">
+            <!-- FOREGROUND_SERVICE_TYPE_DATA_SYNC: used for periodic sync when app
+                 is backgrounded. Requires Play Console justification for targetSdk 34+. -->
         </service>
 
         <!-- ── Meta-data for Flutter engine ─────────────────────────── -->
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+
+        <!-- Disable default WorkManager initializer — we call WorkManager.initialize()
+             explicitly in WorkManagerScheduler to avoid conflicts.
+             From WorkManager 2.6+, initialization goes through
+             androidx.startup.InitializationProvider. -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx.startup"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
             
         <!-- BootReceiver is exported only for BOOT_COMPLETED — guarded by
              android:permission so no third-party app can trigger it directly. -->

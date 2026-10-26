@@ -191,4 +191,6 @@ dependencies {
     // Core library desugaring: backports java.time.* and other APIs to pre-API-26.
     // Required because we target minSdk < 26 and use java.time in plugins.
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    // WorkManager for periodic background sync (ENG-08)
+    implementation("androidx.work:work-runtime-ktx:2.7.0")
 }
